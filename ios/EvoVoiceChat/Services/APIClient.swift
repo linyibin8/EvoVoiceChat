@@ -90,7 +90,7 @@ final class APIClient {
         return base.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
-    private static func makeSession() -> URLSession {
+    nonisolated private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
         configuration.timeoutIntervalForRequest = 180
