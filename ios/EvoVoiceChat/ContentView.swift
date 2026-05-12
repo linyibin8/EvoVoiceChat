@@ -268,7 +268,11 @@ private struct MetricsBarView: View {
                 if isSynthesizing {
                     MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", synthesisElapsed))")
                 } else if ttsMetrics.hasFinalMetrics {
-                    MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", ttsMetrics.latencyMs / 1000))")
+                    if ttsMetrics.segmentCount > 1 {
+                        MetricPill(icon: "forward.frame", text: "首段 \(String(format: "%.1fs", ttsMetrics.firstChunkMs / 1000))")
+                        MetricPill(icon: "square.stack.3d.up", text: "\(ttsMetrics.segmentCount)段")
+                    }
+                    MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", ttsMetrics.totalSynthesisMs / 1000))")
                     MetricPill(icon: "waveform", text: "音频 \(String(format: "%.1fs", ttsMetrics.audioDurationSeconds))")
                     MetricPill(icon: "speedometer", text: "RTF \(String(format: "%.2f", ttsMetrics.rtf))")
                     MetricPill(icon: "textformat", text: "\(String(format: "%.1f", ttsMetrics.charsPerSecond))字/s")

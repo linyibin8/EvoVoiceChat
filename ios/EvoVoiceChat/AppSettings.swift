@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class AppSettings: ObservableObject {
-    @AppStorage("backendURL") var backendURL: String = "http://100.64.0.2:30190" {
+    @AppStorage("backendURL") var backendURL: String = "https://evovoice.evowit.com" {
         willSet { objectWillChange.send() }
     }
     @AppStorage("sourceDomains") var sourceDomains: String = "news.qq.com,finance.sina.com.cn,36kr.com,wallstreetcn.com,reuters.com" {

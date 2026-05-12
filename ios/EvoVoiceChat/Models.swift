@@ -62,6 +62,9 @@ struct TTSMetrics: Equatable {
     var rtf: Double = 0
     var charsPerSecond: Double = 0
     var bytes: Int = 0
+    var segmentCount: Int = 1
+    var firstChunkMs: Double = 0
+    var totalSynthesisMs: Double = 0
 
     var hasFinalMetrics: Bool {
         latencyMs > 0 || audioDurationSeconds > 0 || rtf > 0
