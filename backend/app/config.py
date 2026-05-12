@@ -46,5 +46,11 @@ class Settings:
     news_timeout_seconds: float = _float_env("NEWS_SEARCH_TIMEOUT_SECONDS", 12)
     news_max_results: int = _int_env("NEWS_SEARCH_MAX_RESULTS", 6)
 
+    bing_search_base_url: str = os.getenv("BING_SEARCH_BASE_URL", "https://www.bing.com").rstrip("/")
+    web_search_timeout_seconds: float = _float_env("WEB_SEARCH_TIMEOUT_SECONDS", 12)
+    web_fetch_timeout_seconds: float = _float_env("WEB_FETCH_TIMEOUT_SECONDS", 12)
+    web_fetch_top_results: int = _int_env("WEB_FETCH_TOP_RESULTS", 1)
+    web_fetch_max_chars: int = _int_env("WEB_FETCH_MAX_CHARS", 1200)
+
 
 settings = Settings()

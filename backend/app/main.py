@@ -4,16 +4,17 @@ import time
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 from fastapi.responses import Response
 from httpx import HTTPError
 
 from .clients import chat_completion, synthesize_speech, transcribe_audio
 from .config import settings
-from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest
-from .news import search_latest_news
+from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest, WebReadRequest, WebReadResponse, WebSearchRequest
+from .news import enrich_results_with_page_text, read_web_page, search_latest_news
 
 
-app = FastAPI(title="EvoVoiceChat API", version="0.1.1")
+app = FastAPI(title="EvoVoiceChat API", version="0.1.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,26 +43,43 @@ async def health() -> dict:
             "model": settings.stt_model,
         },
         "news": {
-            "provider": "google-news-rss",
+            "provider": "bing-web+google-news-rss",
             "max_results": settings.news_max_results,
+            "fetch_top_results": settings.web_fetch_top_results,
         },
     }
 
 
 @app.post("/api/search")
-async def search(request: ChatRequest) -> dict:
-    query = request.search.query or _last_user_message(request) or ""
+async def search(request: WebSearchRequest) -> dict:
+    query = request.query
     if not query.strip():
         raise HTTPException(status_code=400, detail="Missing search query")
     try:
         results, elapsed_ms = await search_latest_news(
             query=query,
-            source_domains=request.search.source_domains,
-            max_results=request.search.max_results,
+            source_domains=request.source_domains,
+            max_results=request.max_results,
         )
     except HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Search provider failed: {exc}") from exc
     return {"results": results, "timings_ms": {"search": round(elapsed_ms, 1)}}
+
+
+@app.post("/api/tools/read", response_model=WebReadResponse)
+async def read_tool(request: WebReadRequest) -> WebReadResponse:
+    started = time.perf_counter()
+    async with httpx.AsyncClient(timeout=settings.web_fetch_timeout_seconds, follow_redirects=True) as client:
+        try:
+            title, text = await read_web_page(client, request.url, request.max_chars)
+        except HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Read provider failed: {exc}") from exc
+    return WebReadResponse(
+        url=request.url,
+        title=title,
+        text=text,
+        timings_ms={"read": round((time.perf_counter() - started) * 1000, 1)},
+    )
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -80,6 +98,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
                     max_results=request.search.max_results,
                 )
                 timings["search"] = round(search_ms, 1)
+                if search_results:
+                    search_results, read_ms = await enrich_results_with_page_text(search_results)
+                    if read_ms:
+                        timings["read"] = round(read_ms, 1)
             except HTTPError as exc:
                 timings["search_failed"] = 1.0
                 warnings.append(f"联网搜索暂时失败，已先用模型知识回答：{exc}")

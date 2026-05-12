@@ -23,7 +23,7 @@ final class APIClient {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = APIClient.makeSession()) {
         self.session = session
     }
 
@@ -50,8 +50,8 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(requestBody)
-        request.timeoutInterval = 120
-        let (data, response) = try await session.data(for: request)
+        request.timeoutInterval = 180
+        let (data, response) = try await data(for: request)
         try validate(response: response, data: data)
         return try decoder.decode(ChatResponse.self, from: data)
     }
@@ -63,8 +63,8 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.timeoutInterval = 90
-        let (data, response) = try await session.data(for: request)
+        request.timeoutInterval = 120
+        let (data, response) = try await data(for: request)
         try validate(response: response, data: data)
         guard let http = response as? HTTPURLResponse else {
             throw APIClientError.invalidResponse
@@ -90,6 +90,30 @@ final class APIClient {
         return base.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 180
+        configuration.timeoutIntervalForResource = 240
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
+
+    private func data(for request: URLRequest, retries: Int = 2) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0...retries {
+            do {
+                return try await session.data(for: request)
+            } catch let error as URLError where error.isRetryableNetworkLoss && attempt < retries {
+                lastError = error
+                try await Task.sleep(nanoseconds: UInt64(600_000_000) * UInt64(attempt + 1))
+            } catch {
+                throw error
+            }
+        }
+        throw lastError ?? APIClientError.invalidResponse
+    }
+
     private func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw APIClientError.invalidResponse
@@ -103,5 +127,22 @@ final class APIClient {
     private func doubleHeader(_ response: HTTPURLResponse, _ name: String) -> Double {
         guard let value = response.value(forHTTPHeaderField: name) else { return 0 }
         return Double(value) ?? 0
+    }
+}
+
+private extension URLError {
+    var isRetryableNetworkLoss: Bool {
+        switch code {
+        case .networkConnectionLost,
+             .timedOut,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
     }
 }

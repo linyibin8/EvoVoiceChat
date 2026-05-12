@@ -1,0 +1,38 @@
+# SearXNG settings for EvoVoiceChat.
+# Copy to /etc/searxng/settings.yml inside the container and provide
+# SEARXNG_SECRET as an environment variable on the host.
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "EvoVoice Search"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "set-by-SEARXNG_SECRET"
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  image_proxy: true
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: google
+    disabled: false
+  - name: google news
+    disabled: false
+  - name: wikipedia
+    disabled: false

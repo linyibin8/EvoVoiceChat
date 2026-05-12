@@ -6,7 +6,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("backendURL") var backendURL: String = "https://evovoice.evowit.com" {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("sourceDomains") var sourceDomains: String = "news.qq.com,finance.sina.com.cn,36kr.com,wallstreetcn.com,reuters.com" {
+    @AppStorage("sourceDomains") var sourceDomains: String = "" {
         willSet { objectWillChange.send() }
     }
     @AppStorage("searchEnabled") var searchEnabled: Bool = true {

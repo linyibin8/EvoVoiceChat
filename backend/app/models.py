@@ -36,6 +36,24 @@ class ChatResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class WebSearchRequest(BaseModel):
+    query: str
+    source_domains: list[str] = Field(default_factory=list)
+    max_results: int = 6
+
+
+class WebReadRequest(BaseModel):
+    url: str
+    max_chars: int = 4000
+
+
+class WebReadResponse(BaseModel):
+    url: str
+    title: str | None = None
+    text: str
+    timings_ms: dict[str, float] = Field(default_factory=dict)
+
+
 class TTSRequest(BaseModel):
     text: str
     voice: str | None = None
