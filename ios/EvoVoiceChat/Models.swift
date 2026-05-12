@@ -53,6 +53,7 @@ struct ChatResponse: Codable {
     let search_results: [SearchResult]
     let timings_ms: [String: Double]
     let model: String
+    let warnings: [String]?
 }
 
 struct TTSMetrics: Equatable {

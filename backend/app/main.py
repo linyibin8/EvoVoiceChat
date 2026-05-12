@@ -13,7 +13,7 @@ from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest
 from .news import search_latest_news
 
 
-app = FastAPI(title="EvoVoiceChat API", version="0.1.0")
+app = FastAPI(title="EvoVoiceChat API", version="0.1.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -69,6 +69,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     total_started = time.perf_counter()
     search_results = []
     timings: dict[str, float] = {}
+    warnings: list[str] = []
     if request.search.enabled:
         query = request.search.query or _last_user_message(request)
         if query:
@@ -80,7 +81,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
                 )
                 timings["search"] = round(search_ms, 1)
             except HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"Search provider failed: {exc}") from exc
+                timings["search_failed"] = 1.0
+                warnings.append(f"联网搜索暂时失败，已先用模型知识回答：{exc}")
 
     try:
         text, llm_ms = await chat_completion(request.messages, search_results)
@@ -96,6 +98,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         search_results=search_results,
         timings_ms=timings,
         model=settings.openai_model,
+        warnings=warnings,
     )
 
 

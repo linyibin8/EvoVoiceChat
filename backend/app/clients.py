@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import time
 import wave
+import asyncio
 
 import httpx
 
@@ -14,6 +15,45 @@ SYSTEM_PROMPT = """你是 Evo Voice，一个自然、可靠、适合语音对话
 回答要像真人聊天一样顺畅，优先给结论，再给必要细节。
 如果提供了联网搜索结果，必须基于搜索结果回答最新新闻或事实问题，并在关键句后标注来源编号，例如 [1]。
 如果搜索结果不足，要直接说明不确定，不要编造。"""
+
+TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+
+async def _post_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    attempts: int = 3,
+    **kwargs,
+) -> httpx.Response:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            response = await client.post(url, **kwargs)
+            if response.status_code in TRANSIENT_STATUS_CODES and attempt < attempts - 1:
+                last_error = httpx.HTTPStatusError(
+                    f"transient upstream status {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+                await asyncio.sleep(0.6 * (attempt + 1))
+                continue
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in TRANSIENT_STATUS_CODES or attempt == attempts - 1:
+                raise
+            last_error = exc
+            await asyncio.sleep(0.6 * (attempt + 1))
+        except httpx.RequestError as exc:
+            if attempt == attempts - 1:
+                raise
+            last_error = exc
+            await asyncio.sleep(0.6 * (attempt + 1))
+    if last_error:
+        raise last_error
+    raise RuntimeError("upstream request failed without an exception")
 
 
 def _search_context(results: list[SearchResult]) -> str:
@@ -58,8 +98,12 @@ async def chat_completion(
         "Content-Type": "application/json",
     }
     async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
-        response = await client.post(f"{settings.openai_base_url}/chat/completions", json=payload, headers=headers)
-        response.raise_for_status()
+        response = await _post_with_retries(
+            client,
+            f"{settings.openai_base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
         data = response.json()
     elapsed_ms = (time.perf_counter() - started) * 1000
     try:
@@ -86,8 +130,7 @@ async def synthesize_speech(text: str, voice: str | None = None) -> tuple[bytes,
         "response_format": "wav",
     }
     async with httpx.AsyncClient(timeout=settings.tts_timeout_seconds) as client:
-        response = await client.post(f"{settings.tts_base_url}/v1/audio/speech", json=payload)
-        response.raise_for_status()
+        response = await _post_with_retries(client, f"{settings.tts_base_url}/v1/audio/speech", json=payload)
         audio = response.content
     latency_ms = (time.perf_counter() - started) * 1000
     duration_s = wav_duration_seconds(audio) or 0.0
@@ -113,8 +156,12 @@ async def transcribe_audio(filename: str, content: bytes, content_type: str | No
     if language:
         data["language"] = language
     async with httpx.AsyncClient(timeout=settings.stt_timeout_seconds) as client:
-        response = await client.post(f"{settings.stt_base_url}/v1/audio/transcriptions", data=data, files=files)
-        response.raise_for_status()
+        response = await _post_with_retries(
+            client,
+            f"{settings.stt_base_url}/v1/audio/transcriptions",
+            data=data,
+            files=files,
+        )
         payload = response.json()
     elapsed_ms = (time.perf_counter() - started) * 1000
     return payload, elapsed_ms

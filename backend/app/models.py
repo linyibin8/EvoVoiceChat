@@ -33,6 +33,7 @@ class ChatResponse(BaseModel):
     search_results: list[SearchResult] = Field(default_factory=list)
     timings_ms: dict[str, float] = Field(default_factory=dict)
     model: str
+    warnings: list[str] = Field(default_factory=list)
 
 
 class TTSRequest(BaseModel):

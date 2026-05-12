@@ -108,6 +108,9 @@ final class ChatViewModel: ObservableObject {
             do {
                 let response = try await api.sendChat(messages: messages, prompt: prompt, settings: settings)
                 lastTimings = response.timings_ms
+                if let warnings = response.warnings, !warnings.isEmpty {
+                    errorMessage = warnings.joined(separator: "；")
+                }
                 let assistant = ChatMessage(role: .assistant, content: response.assistant_text, sources: response.search_results)
                 messages.append(assistant)
                 isSending = false
