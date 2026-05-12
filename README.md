@@ -2,6 +2,8 @@
 
 Native iOS voice chat MVP for a Yuanbao/Doubao-style assistant.
 
+GitHub: https://github.com/linyibin8/EvoVoiceChat
+
 ## What is included
 
 - SwiftUI iOS app with text chat, push-to-talk voice mode, live speech recognition, Dell TTS playback, and real-time latency/RTF display.
@@ -23,6 +25,8 @@ powershell -ExecutionPolicy Bypass -File scripts\run_backend.ps1
 ```
 
 Default backend URL for the iOS app is `http://100.64.0.2:30190`. Change it in the app settings for local testing.
+
+The current internal deployment runs on `hqb-neighbor-win` at `http://100.64.0.2:30190`, with Windows Task Scheduler task `EvoVoiceChat-Backend-Native`.
 
 ## iOS build
 
