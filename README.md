@@ -34,6 +34,9 @@ Use `scripts/switch_backend_profile.ps1` to switch backend targets without commi
 # Local machine backend calls the local OpenAI-compatible proxy and Dell LAN services.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-lan
 
+# Local machine backend calls the local OpenAI-compatible proxy and Dell over Tailscale.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-tailscale
+
 # 100.64.0.2 backend calls this machine over Tailscale and Dell over Tailscale.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile server-to-local-tailscale
 

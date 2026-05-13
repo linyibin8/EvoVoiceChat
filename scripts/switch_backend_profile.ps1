@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("local-lan", "server-to-local", "server-to-local-tailscale", "tailscale")]
+  [ValidateSet("local-lan", "local-tailscale", "server-to-local", "server-to-local-tailscale", "tailscale")]
   [string]$Profile = "local-lan",
   [string]$ApiKey,
   [switch]$PromptApiKey,
@@ -89,6 +89,12 @@ switch ($Profile) {
       -OpenAIBaseUrl "http://127.0.0.1:50553/v1" `
       -TTSBaseUrl "http://192.168.1.13:39040" `
       -STTBaseUrl "http://192.168.1.13:39050"
+  }
+  "local-tailscale" {
+    $result = Write-EvoEnv `
+      -OpenAIBaseUrl "http://127.0.0.1:50553/v1" `
+      -TTSBaseUrl "http://100.64.0.5:39040" `
+      -STTBaseUrl "http://100.64.0.5:39050"
   }
   "server-to-local" {
     $result = Write-EvoEnv `

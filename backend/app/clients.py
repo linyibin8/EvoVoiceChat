@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import time
 import wave
 import asyncio
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -20,6 +22,20 @@ SYSTEM_PROMPT = """你是 Evo Voice，一个自然、可靠、适合语音对话
 如果搜索结果不足，要说“这次联网搜索没有找到足够可靠的新结果”，不要说自己没有联网工具，也不要编造。"""
 
 TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _trust_env_for_url(url: str) -> bool:
+    host = urlparse(url).hostname
+    if not host or host.lower() == "localhost":
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    if address in TAILSCALE_NET:
+        return False
+    return not (address.is_loopback or address.is_private or address.is_link_local)
 
 
 async def _post_with_retries(
@@ -106,10 +122,14 @@ async def chat_completion(
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
+    endpoint = f"{settings.openai_base_url}/chat/completions"
+    async with httpx.AsyncClient(
+        timeout=settings.openai_timeout_seconds,
+        trust_env=_trust_env_for_url(endpoint),
+    ) as client:
         response = await _post_with_retries(
             client,
-            f"{settings.openai_base_url}/chat/completions",
+            endpoint,
             json=payload,
             headers=headers,
         )
@@ -139,10 +159,14 @@ async def chat_completion_stream(
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
+    endpoint = f"{settings.openai_base_url}/chat/completions"
+    async with httpx.AsyncClient(
+        timeout=settings.openai_timeout_seconds,
+        trust_env=_trust_env_for_url(endpoint),
+    ) as client:
         async with client.stream(
             "POST",
-            f"{settings.openai_base_url}/chat/completions",
+            endpoint,
             json=payload,
             headers=headers,
         ) as response:
@@ -181,8 +205,12 @@ async def synthesize_speech(text: str, voice: str | None = None) -> tuple[bytes,
         "input": text,
         "response_format": "wav",
     }
-    async with httpx.AsyncClient(timeout=settings.tts_timeout_seconds) as client:
-        response = await _post_with_retries(client, f"{settings.tts_base_url}/v1/audio/speech", json=payload)
+    endpoint = f"{settings.tts_base_url}/v1/audio/speech"
+    async with httpx.AsyncClient(
+        timeout=settings.tts_timeout_seconds,
+        trust_env=_trust_env_for_url(endpoint),
+    ) as client:
+        response = await _post_with_retries(client, endpoint, json=payload)
         audio = response.content
     latency_ms = (time.perf_counter() - started) * 1000
     duration_s = wav_duration_seconds(audio) or 0.0
@@ -207,10 +235,14 @@ async def transcribe_audio(filename: str, content: bytes, content_type: str | No
     data = {"model": settings.stt_model}
     if language:
         data["language"] = language
-    async with httpx.AsyncClient(timeout=settings.stt_timeout_seconds) as client:
+    endpoint = f"{settings.stt_base_url}/v1/audio/transcriptions"
+    async with httpx.AsyncClient(
+        timeout=settings.stt_timeout_seconds,
+        trust_env=_trust_env_for_url(endpoint),
+    ) as client:
         response = await _post_with_retries(
             client,
-            f"{settings.stt_base_url}/v1/audio/transcriptions",
+            endpoint,
             data=data,
             files=files,
         )
