@@ -29,6 +29,7 @@ app.add_middleware(
 async def health() -> dict:
     return {
         "ok": True,
+        "profile": settings.profile,
         "chat": {
             "base_url": settings.openai_base_url,
             "model": settings.openai_model,

@@ -24,27 +24,36 @@ backend\.venv\Scripts\pip install -r backend\requirements.txt
 powershell -ExecutionPolicy Bypass -File scripts\run_backend.ps1
 ```
 
-Default backend URL for the iOS app is `http://100.64.0.2:30190`. Change it in the app settings for local testing.
+Default backend URL for the iOS app is `http://192.168.0.11:30190`, so a phone on the same LAN can call this machine directly. Change it in the app settings when using the public HTTPS endpoint or the Tailscale fallback.
 
 ## Backend profiles
 
 Use `scripts/switch_backend_profile.ps1` to switch backend targets without committing secrets:
 
 ```powershell
-# Local machine backend calls the local OpenAI-compatible proxy and Dell LAN services.
+# Local machine backend calls LAN services only:
+#   LLM http://192.168.0.11:50553/v1
+#   TTS http://192.168.0.13:39040
+#   STT http://192.168.0.13:39050
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-lan
+
+# Local simulator loopback for the LLM, while TTS/STT still use Dell LAN.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-loopback
 
 # Local machine backend calls the local OpenAI-compatible proxy and Dell over Tailscale.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-tailscale
 
-# 100.64.0.2 backend calls this machine over Tailscale and Dell over Tailscale.
+# 100.64.0.2 backend tries to call this machine and Dell over 192.168 LAN.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile server-to-local-lan
+
+# 100.64.0.2 backend calls this machine and Dell over Tailscale.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile server-to-local-tailscale
 
 # Original deployment profile.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile tailscale
 ```
 
-The LAN profile for `100.64.0.2 -> 192.168.0.11` is also available as `server-to-local`, but use it only when that route is reachable. Runtime secrets stay in `backend/.env`.
+`server-to-local` is kept as an alias for `server-to-local-lan`. Use it only when `100.64.0.2` can route to `192.168.0.11` and `192.168.0.13`; otherwise use the local backend directly from the phone with `http://192.168.0.11:30190`. Runtime secrets stay in `backend/.env`.
 
 To safely enter a local API key without putting it in shell history:
 

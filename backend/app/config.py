@@ -26,6 +26,7 @@ def _int_env(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
+    profile: str = os.getenv("EVOVOICE_PROFILE", "custom")
     host: str = os.getenv("EVOVOICE_HOST", "0.0.0.0")
     port: int = _int_env("EVOVOICE_PORT", 30190)
 

@@ -4,10 +4,23 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
+    private var backendPresetSelection: Binding<String> {
+        Binding(
+            get: { settings.matchingBackendPresetID },
+            set: { settings.applyBackendPreset($0) }
+        )
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("后端") {
+                    Picker("配置", selection: backendPresetSelection) {
+                        ForEach(AppSettings.backendPresets) { preset in
+                            Text(preset.name).tag(preset.id)
+                        }
+                        Text("自定义").tag(AppSettings.customBackendPresetID)
+                    }
                     TextField("Backend URL", text: $settings.backendURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)

@@ -1,9 +1,12 @@
 param(
-  [ValidateSet("local-lan", "local-tailscale", "server-to-local", "server-to-local-tailscale", "tailscale")]
+  [ValidateSet("local-lan", "local-loopback", "local-tailscale", "server-to-local", "server-to-local-lan", "server-to-local-tailscale", "tailscale")]
   [string]$Profile = "local-lan",
   [string]$ApiKey,
   [switch]$PromptApiKey,
   [switch]$Restart,
+  [string]$LocalLanOpenAIBaseUrl = $(if ($env:EVOVOICE_LAN_OPENAI_BASE_URL) { $env:EVOVOICE_LAN_OPENAI_BASE_URL } else { "http://192.168.0.11:50553/v1" }),
+  [string]$DellLanTTSBaseUrl = $(if ($env:EVOVOICE_LAN_TTS_BASE_URL) { $env:EVOVOICE_LAN_TTS_BASE_URL } else { "http://192.168.0.13:39040" }),
+  [string]$DellLanSTTBaseUrl = $(if ($env:EVOVOICE_LAN_STT_BASE_URL) { $env:EVOVOICE_LAN_STT_BASE_URL } else { "http://192.168.0.13:39050" }),
   [string]$TaskName = $(if ($env:EVOVOICE_TASK_NAME) { $env:EVOVOICE_TASK_NAME } else { "EvoVoiceChat-Backend-Native" })
 )
 
@@ -28,7 +31,8 @@ function Write-EvoEnv {
   param(
     [string]$OpenAIBaseUrl,
     [string]$TTSBaseUrl,
-    [string]$STTBaseUrl
+    [string]$STTBaseUrl,
+    [string]$IosBackendUrl
   )
 
   $resolvedApiKey = $ApiKey
@@ -46,6 +50,7 @@ function Write-EvoEnv {
   if (-not $resolvedApiKey) { $resolvedApiKey = "" }
 
   $lines = @(
+    "EVOVOICE_PROFILE=$Profile",
     "EVOVOICE_HOST=0.0.0.0",
     "EVOVOICE_PORT=30190",
     "",
@@ -76,6 +81,7 @@ function Write-EvoEnv {
   [pscustomobject]@{
     Profile = $Profile
     EnvFile = $envFile
+    IosBackendUrl = $IosBackendUrl
     OpenAIBaseUrl = $OpenAIBaseUrl
     TTSBaseUrl = $TTSBaseUrl
     STTBaseUrl = $STTBaseUrl
@@ -86,33 +92,52 @@ function Write-EvoEnv {
 switch ($Profile) {
   "local-lan" {
     $result = Write-EvoEnv `
+      -OpenAIBaseUrl $LocalLanOpenAIBaseUrl `
+      -TTSBaseUrl $DellLanTTSBaseUrl `
+      -STTBaseUrl $DellLanSTTBaseUrl `
+      -IosBackendUrl "http://192.168.0.11:30190"
+  }
+  "local-loopback" {
+    $result = Write-EvoEnv `
       -OpenAIBaseUrl "http://127.0.0.1:50553/v1" `
-      -TTSBaseUrl "http://192.168.1.13:39040" `
-      -STTBaseUrl "http://192.168.1.13:39050"
+      -TTSBaseUrl $DellLanTTSBaseUrl `
+      -STTBaseUrl $DellLanSTTBaseUrl `
+      -IosBackendUrl "http://127.0.0.1:30190"
   }
   "local-tailscale" {
     $result = Write-EvoEnv `
       -OpenAIBaseUrl "http://127.0.0.1:50553/v1" `
       -TTSBaseUrl "http://100.64.0.5:39040" `
-      -STTBaseUrl "http://100.64.0.5:39050"
+      -STTBaseUrl "http://100.64.0.5:39050" `
+      -IosBackendUrl "http://192.168.0.11:30190"
   }
   "server-to-local" {
     $result = Write-EvoEnv `
-      -OpenAIBaseUrl "http://192.168.0.11:50553/v1" `
-      -TTSBaseUrl "http://192.168.1.13:39040" `
-      -STTBaseUrl "http://192.168.1.13:39050"
+      -OpenAIBaseUrl $LocalLanOpenAIBaseUrl `
+      -TTSBaseUrl $DellLanTTSBaseUrl `
+      -STTBaseUrl $DellLanSTTBaseUrl `
+      -IosBackendUrl "http://100.64.0.2:30190"
+  }
+  "server-to-local-lan" {
+    $result = Write-EvoEnv `
+      -OpenAIBaseUrl $LocalLanOpenAIBaseUrl `
+      -TTSBaseUrl $DellLanTTSBaseUrl `
+      -STTBaseUrl $DellLanSTTBaseUrl `
+      -IosBackendUrl "http://100.64.0.2:30190"
   }
   "server-to-local-tailscale" {
     $result = Write-EvoEnv `
       -OpenAIBaseUrl "http://100.64.0.3:50553/v1" `
       -TTSBaseUrl "http://100.64.0.5:39040" `
-      -STTBaseUrl "http://100.64.0.5:39050"
+      -STTBaseUrl "http://100.64.0.5:39050" `
+      -IosBackendUrl "http://100.64.0.2:30190"
   }
   "tailscale" {
     $result = Write-EvoEnv `
       -OpenAIBaseUrl "https://sapi.evowit.com/v1" `
       -TTSBaseUrl "http://100.64.0.5:39040" `
-      -STTBaseUrl "http://100.64.0.5:39050"
+      -STTBaseUrl "http://100.64.0.5:39050" `
+      -IosBackendUrl "http://100.64.0.2:30190"
   }
 }
 
