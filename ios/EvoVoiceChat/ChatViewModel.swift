@@ -144,10 +144,57 @@ final class ChatViewModel: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                self.isSending = false
-                self.errorMessage = error.localizedDescription
-                self.replaceEmptyAssistant(assistantID: assistantID, with: "这次请求失败：\(error.localizedDescription)")
+                await self.fallbackToNonStreamingChat(
+                    messages: requestMessages,
+                    prompt: prompt,
+                    settings: settings,
+                    assistantID: assistantID,
+                    speakAnswer: speakAnswer,
+                    originalError: error
+                )
             }
+        }
+    }
+
+    private func fallbackToNonStreamingChat(
+        messages requestMessages: [ChatMessage],
+        prompt: String,
+        settings: AppSettings,
+        assistantID: UUID,
+        speakAnswer: Bool,
+        originalError: Error
+    ) async {
+        guard originalError.isTransientNetworkFailure else {
+            isSending = false
+            errorMessage = originalError.localizedDescription
+            replaceEmptyAssistant(assistantID: assistantID, with: "这次请求失败：\(originalError.localizedDescription)")
+            return
+        }
+
+        errorMessage = "流式连接中断，已自动切换普通请求。"
+        queuedSpeechSegments.removeAll()
+        pendingSpeechText = ""
+        player.stop()
+
+        do {
+            let response = try await api.sendChat(messages: requestMessages, prompt: prompt, settings: settings)
+            setAssistantContent(assistantID: assistantID, text: response.assistant_text)
+            updateAssistantSources(assistantID: assistantID, sources: response.search_results)
+            mergeTimings(response.timings_ms)
+            if let warning = response.warnings?.first {
+                errorMessage = warning
+            } else {
+                errorMessage = nil
+            }
+            isSending = false
+            guard speakAnswer else { return }
+            pendingSpeechText = response.assistant_text
+            enqueueReadySpeechSegments(settings: settings, force: true)
+            startTTSWorkerIfNeeded(settings: settings)
+        } catch {
+            isSending = false
+            errorMessage = error.localizedDescription
+            replaceEmptyAssistant(assistantID: assistantID, with: "这次请求失败：\(error.localizedDescription)")
         }
     }
 
@@ -203,6 +250,14 @@ final class ChatViewModel: ObservableObject {
     private func appendToAssistant(assistantID: UUID, text: String) {
         guard let index = messages.firstIndex(where: { $0.id == assistantID }) else { return }
         messages[index].content += text
+    }
+
+    private func setAssistantContent(assistantID: UUID, text: String) {
+        guard let index = messages.firstIndex(where: { $0.id == assistantID }) else {
+            messages.append(ChatMessage(role: .assistant, content: text))
+            return
+        }
+        messages[index].content = text
     }
 
     private func updateAssistantSources(assistantID: UUID, sources: [SearchResult]) {

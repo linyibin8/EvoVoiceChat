@@ -20,6 +20,35 @@ enum APIClientError: LocalizedError {
     }
 }
 
+extension Error {
+    var isTransientNetworkFailure: Bool {
+        let code: URLError.Code
+        if let urlError = self as? URLError {
+            code = urlError.code
+        } else {
+            let nsError = self as NSError
+            guard nsError.domain == NSURLErrorDomain else { return false }
+            code = URLError.Code(rawValue: nsError.code)
+        }
+
+        switch code {
+        case .networkConnectionLost,
+             .timedOut,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .cannotLoadFromNetwork,
+             .internationalRoamingOff,
+             .callIsActive,
+             .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 enum ChatStreamEvent {
     case metadata(searchResults: [SearchResult], timings: [String: Double], model: String?, warnings: [String])
     case delta(String)
@@ -59,8 +88,8 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(requestBody)
-        request.timeoutInterval = 120
-        let (data, response) = try await session.data(for: request)
+        request.timeoutInterval = 180
+        let (data, response) = try await dataWithTransientRetry(for: request)
         try validate(response: response, data: data)
         return try decoder.decode(ChatResponse.self, from: data)
     }
@@ -120,8 +149,8 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.timeoutInterval = 90
-        let (data, response) = try await session.data(for: request)
+        request.timeoutInterval = 120
+        let (data, response) = try await dataWithTransientRetry(for: request)
         try validate(response: response, data: data)
         guard let http = response as? HTTPURLResponse else {
             throw APIClientError.invalidResponse
@@ -138,6 +167,22 @@ final class APIClient {
             bytes: Int(doubleHeader(http, "X-Evo-TTS-Bytes"))
         )
         return TTSResult(fileURL: fileURL, metrics: metrics)
+    }
+
+    private func dataWithTransientRetry(for request: URLRequest, attempts: Int = 2) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<attempts {
+            do {
+                return try await session.data(for: request)
+            } catch {
+                lastError = error
+                if !error.isTransientNetworkFailure || attempt == attempts - 1 {
+                    throw error
+                }
+                try await Task.sleep(nanoseconds: UInt64(400_000_000 * (attempt + 1)))
+            }
+        }
+        throw lastError ?? APIClientError.invalidResponse
     }
 
     private func makeChatRequest(messages: [ChatMessage], prompt: String, settings: AppSettings) -> ChatRequest {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -128,8 +129,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
-    async def events():
-        total_started = time.perf_counter()
+    async def prepare_search() -> tuple[list, dict[str, float], list[str]]:
         search_results = []
         timings: dict[str, float] = {}
         warnings: list[str] = []
@@ -152,6 +152,25 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                     timings["search_failed"] = 1.0
                     warnings.append(f"联网搜索暂时失败，已先用模型知识回答：{exc}")
 
+        return search_results, timings, warnings
+
+    async def events():
+        total_started = time.perf_counter()
+        yield _sse("ping", {"message": "start"})
+
+        search_task = asyncio.create_task(prepare_search())
+        try:
+            while not search_task.done():
+                await asyncio.sleep(3)
+                if not search_task.done():
+                    yield _sse("ping", {"message": "search"})
+            search_results, timings, warnings = await search_task
+        finally:
+            if not search_task.done():
+                search_task.cancel()
+
+        yield _sse("ping", {"message": "llm"})
+
         yield _sse(
             "metadata",
             {
@@ -163,15 +182,38 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         )
 
         llm_started = time.perf_counter()
+        llm_queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+
+        async def pump_llm_stream() -> None:
+            try:
+                async for delta in chat_completion_stream(request.messages, search_results):
+                    await llm_queue.put(("delta", delta))
+            except HTTPError as exc:
+                await llm_queue.put(("error", f"LLM provider failed: {exc}"))
+            except RuntimeError as exc:
+                await llm_queue.put(("error", str(exc)))
+            finally:
+                await llm_queue.put(("done", None))
+
+        llm_task = asyncio.create_task(pump_llm_stream())
         try:
-            async for delta in chat_completion_stream(request.messages, search_results):
-                yield _sse("delta", {"text": delta})
-        except HTTPError as exc:
-            yield _sse("error", {"message": f"LLM provider failed: {exc}"})
-            return
-        except RuntimeError as exc:
-            yield _sse("error", {"message": str(exc)})
-            return
+            while True:
+                try:
+                    kind, value = await asyncio.wait_for(llm_queue.get(), timeout=3)
+                except asyncio.TimeoutError:
+                    yield _sse("ping", {"message": "llm"})
+                    continue
+
+                if kind == "delta" and value:
+                    yield _sse("delta", {"text": value})
+                elif kind == "error":
+                    yield _sse("error", {"message": value or "流式回答失败"})
+                    return
+                elif kind == "done":
+                    break
+        finally:
+            if not llm_task.done():
+                llm_task.cancel()
 
         timings["llm"] = round((time.perf_counter() - llm_started) * 1000, 1)
         timings["total"] = round((time.perf_counter() - total_started) * 1000, 1)
