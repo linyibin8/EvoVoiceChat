@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from httpx import HTTPError
 
-from .clients import chat_completion, synthesize_speech, transcribe_audio
+from .clients import chat_completion, chat_completion_stream, synthesize_speech, transcribe_audio
 from .config import settings
 from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest, WebReadRequest, WebReadResponse, WebSearchRequest
 from .news import enrich_results_with_page_text, read_web_page, search_latest_news
 
 
-app = FastAPI(title="EvoVoiceChat API", version="0.1.2")
+app = FastAPI(title="EvoVoiceChat API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -124,6 +125,68 @@ async def chat(request: ChatRequest) -> ChatResponse:
     )
 
 
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    async def events():
+        total_started = time.perf_counter()
+        search_results = []
+        timings: dict[str, float] = {}
+        warnings: list[str] = []
+
+        if request.search.enabled:
+            query = request.search.query or _last_user_message(request)
+            if query:
+                try:
+                    search_results, search_ms = await search_latest_news(
+                        query=query,
+                        source_domains=request.search.source_domains,
+                        max_results=request.search.max_results,
+                    )
+                    timings["search"] = round(search_ms, 1)
+                    if search_results:
+                        search_results, read_ms = await enrich_results_with_page_text(search_results)
+                        if read_ms:
+                            timings["read"] = round(read_ms, 1)
+                except HTTPError as exc:
+                    timings["search_failed"] = 1.0
+                    warnings.append(f"联网搜索暂时失败，已先用模型知识回答：{exc}")
+
+        yield _sse(
+            "metadata",
+            {
+                "search_results": [_model_dump(item) for item in search_results],
+                "timings_ms": timings,
+                "model": settings.openai_model,
+                "warnings": warnings,
+            },
+        )
+
+        llm_started = time.perf_counter()
+        try:
+            async for delta in chat_completion_stream(request.messages, search_results):
+                yield _sse("delta", {"text": delta})
+        except HTTPError as exc:
+            yield _sse("error", {"message": f"LLM provider failed: {exc}"})
+            return
+        except RuntimeError as exc:
+            yield _sse("error", {"message": str(exc)})
+            return
+
+        timings["llm"] = round((time.perf_counter() - llm_started) * 1000, 1)
+        timings["total"] = round((time.perf_counter() - total_started) * 1000, 1)
+        yield _sse("done", {"timings_ms": timings, "model": settings.openai_model})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/tts")
 async def tts(request: TTSRequest) -> Response:
     text = request.text.strip()
@@ -168,3 +231,14 @@ def _last_user_message(request: ChatRequest) -> str | None:
         if message.role == "user" and message.content.strip():
             return message.content.strip()
     return None
+
+
+def _sse(event: str, payload: dict) -> str:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _model_dump(item) -> dict:
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    return item.dict()

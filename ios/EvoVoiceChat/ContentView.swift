@@ -33,7 +33,7 @@ struct ContentView: View {
                 InputBarView(
                     text: $viewModel.inputText,
                     isListening: viewModel.isListening,
-                    isBusy: viewModel.isSending || viewModel.isSynthesizing,
+                    isBusy: viewModel.isSending || viewModel.isSynthesizing || viewModel.isPlaying,
                     onSend: { viewModel.sendTapped(settings: settings) },
                     onMicDown: { viewModel.startListening(settings: settings) },
                     onMicUp: { viewModel.stopListeningAndSend(settings: settings) },
@@ -64,7 +64,7 @@ private struct HeaderView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Evo Voice")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 24, weight: .semibold))
                 Text(healthText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -76,11 +76,10 @@ private struct HeaderView: View {
             } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 44, height: 44)
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(width: 42, height: 42)
             }
+            .buttonStyle(.bordered)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -96,48 +95,31 @@ private struct ModeBarView: View {
         HStack(spacing: 10) {
             Toggle(isOn: $settings.searchEnabled) {
                 Label("联网", systemImage: "magnifyingglass")
-                    .font(.callout.weight(.medium))
             }
             .toggleStyle(.button)
 
             Toggle(isOn: $settings.handsFreeMode) {
                 Label("连聊", systemImage: "waveform.and.mic")
-                    .font(.callout.weight(.medium))
             }
             .toggleStyle(.button)
 
-            SourceSummaryView(domains: settings.parsedSourceDomains)
-            Spacer(minLength: 0)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(settings.parsedSourceDomains.prefix(5), id: \.self) { domain in
+                        Text(domain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(.systemBackground))
-    }
-}
-
-private struct SourceSummaryView: View {
-    let domains: [String]
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let first = domains.first {
-                Text(first)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 116, alignment: .leading)
-            }
-            if domains.count > 1 {
-                Text("+\(domains.count - 1)")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -157,11 +139,18 @@ private struct MessageListView: View {
                 .padding(.vertical, 14)
             }
             .onChange(of: messages.count) { _, _ in
-                if let last = messages.last {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
+                scrollToLast(proxy)
+            }
+            .onChange(of: messages.last?.content) { _, _ in
+                scrollToLast(proxy)
+            }
+        }
+    }
+
+    private func scrollToLast(_ proxy: ScrollViewProxy) {
+        if let last = messages.last {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
     }
@@ -176,8 +165,8 @@ private struct ChatBubbleView: View {
         HStack(alignment: .bottom) {
             if isUser { Spacer(minLength: 36) }
             VStack(alignment: .leading, spacing: 8) {
-                Text(message.content)
-                    .font(.callout)
+                Text(displayText)
+                    .font(.body)
                     .foregroundStyle(isUser ? Color.white : Color.primary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -192,6 +181,13 @@ private struct ChatBubbleView: View {
             .shadow(color: Color.black.opacity(0.04), radius: 5, y: 2)
             if !isUser { Spacer(minLength: 36) }
         }
+    }
+
+    private var displayText: String {
+        if message.content.isEmpty, !isUser {
+            return "..."
+        }
+        return message.content
     }
 }
 
@@ -268,11 +264,7 @@ private struct MetricsBarView: View {
                 if isSynthesizing {
                     MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", synthesisElapsed))")
                 } else if ttsMetrics.hasFinalMetrics {
-                    if ttsMetrics.segmentCount > 1 {
-                        MetricPill(icon: "forward.frame", text: "首段 \(String(format: "%.1fs", ttsMetrics.firstChunkMs / 1000))")
-                        MetricPill(icon: "square.stack.3d.up", text: "\(ttsMetrics.segmentCount)段")
-                    }
-                    MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", ttsMetrics.totalSynthesisMs / 1000))")
+                    MetricPill(icon: "speaker.wave.2", text: "TTS \(String(format: "%.1fs", ttsMetrics.latencyMs / 1000))")
                     MetricPill(icon: "waveform", text: "音频 \(String(format: "%.1fs", ttsMetrics.audioDurationSeconds))")
                     MetricPill(icon: "speedometer", text: "RTF \(String(format: "%.2f", ttsMetrics.rtf))")
                     MetricPill(icon: "textformat", text: "\(String(format: "%.1f", ttsMetrics.charsPerSecond))字/s")
@@ -321,7 +313,7 @@ private struct InputBarView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            TextField("问点什么", text: $text, axis: .vertical)
+            TextField("问点什么，或按住说话", text: $text, axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
@@ -334,11 +326,10 @@ private struct InputBarView: View {
             } label: {
                 Image(systemName: isBusy ? "stop.fill" : "paperplane.fill")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle((isBusy || canSend) ? Color.white : Color.secondary)
-                    .frame(width: 46, height: 46)
-                    .background((isBusy || canSend) ? Color.accentColor : Color(.secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(width: 42, height: 42)
             }
+            .buttonStyle(.borderedProminent)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy)
 
             PressToTalkButton(isListening: isListening, onStart: onMicDown, onStop: onMicUp)
@@ -346,10 +337,6 @@ private struct InputBarView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(.systemBackground))
-    }
-
-    private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

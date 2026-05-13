@@ -2,16 +2,16 @@
 
 Native iOS voice chat MVP for a Yuanbao/Doubao-style assistant.
 
-GitHub: https://github.com/linyibin8/EvoVoiceChat
-
 ## What is included
 
 - SwiftUI iOS app with text chat, push-to-talk voice mode, live speech recognition, Dell TTS playback, and real-time latency/RTF display.
 - FastAPI backend proxy for:
   - OpenAI-compatible chat completions through the evowit endpoint.
+  - Streaming chat completions via Server-Sent Events (`/api/chat/stream`) for incremental UI updates.
   - Dell VoxCPM2 TTS (`/v1/audio/speech`) with speed headers.
   - Dell Whisper STT (`/v1/audio/transcriptions`) for fallback transcription.
   - Latest-news search via Google News RSS fallback, with source-domain filters.
+  - iOS segmented TTS playback: stream text first, synthesize completed sentence chunks, and play the queue while later text is still arriving.
 
 ## Local backend
 
@@ -26,7 +26,22 @@ powershell -ExecutionPolicy Bypass -File scripts\run_backend.ps1
 
 Default backend URL for the iOS app is `http://100.64.0.2:30190`. Change it in the app settings for local testing.
 
-The current internal deployment runs on `hqb-neighbor-win` at `http://100.64.0.2:30190`, with Windows Task Scheduler task `EvoVoiceChat-Backend-Native`.
+## Backend profiles
+
+Use `scripts/switch_backend_profile.ps1` to switch backend targets without committing secrets:
+
+```powershell
+# Local machine backend calls the local OpenAI-compatible proxy and Dell LAN services.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-lan
+
+# 100.64.0.2 backend calls this machine over Tailscale and Dell over Tailscale.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile server-to-local-tailscale
+
+# Original deployment profile.
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile tailscale
+```
+
+The LAN profile for `100.64.0.2 -> 192.168.0.11` is also available as `server-to-local`, but use it only when that route is reachable. Runtime secrets stay in `backend/.env`.
 
 ## iOS build
 

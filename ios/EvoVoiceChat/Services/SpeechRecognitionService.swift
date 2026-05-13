@@ -24,9 +24,12 @@ final class SpeechRecognitionService: NSObject {
         }
     }
 
-    func start() async throws {
+    func start(preferOnDevice: Bool = true) async throws {
         guard await requestAuthorization() else {
             throw SpeechError.notAuthorized
+        }
+        guard let recognizer else {
+            throw SpeechError.recognizerUnavailable
         }
         stop()
 
@@ -36,6 +39,9 @@ final class SpeechRecognitionService: NSObject {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        if preferOnDevice, recognizer.supportsOnDeviceRecognition {
+            request.requiresOnDeviceRecognition = true
+        }
         if #available(iOS 17.0, *) {
             request.addsPunctuation = true
         }
@@ -48,7 +54,7 @@ final class SpeechRecognitionService: NSObject {
             request?.append(buffer)
         }
 
-        recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             if let result {
                 let transcript = result.bestTranscription.formattedString
                 Task { @MainActor in
@@ -82,8 +88,14 @@ final class SpeechRecognitionService: NSObject {
 
 enum SpeechError: LocalizedError {
     case notAuthorized
+    case recognizerUnavailable
 
     var errorDescription: String? {
-        "没有语音识别权限"
+        switch self {
+        case .notAuthorized:
+            return "没有语音识别权限"
+        case .recognizerUnavailable:
+            return "当前设备不可用语音识别"
+        }
     }
 }

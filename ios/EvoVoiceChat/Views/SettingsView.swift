@@ -23,6 +23,7 @@ struct SettingsView: View {
 
                 Section("语音") {
                     Toggle("连续语音对话", isOn: $settings.handsFreeMode)
+                    Toggle("优先本机识别", isOn: $settings.preferOnDeviceSpeech)
                     TextField("TTS Voice", text: $settings.ttsVoice)
                         .textInputAutocapitalization(.never)
                 }

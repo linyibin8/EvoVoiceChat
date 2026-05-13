@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import json
 import time
 import wave
 import asyncio
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -74,6 +76,18 @@ def _search_context(results: list[SearchResult]) -> str:
     return "\n\n".join(lines)
 
 
+def _openai_messages(
+    messages: list[ChatMessage],
+    search_results: list[SearchResult],
+) -> list[dict[str, str]]:
+    openai_messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    context = _search_context(search_results)
+    if context:
+        openai_messages.append({"role": "system", "content": context})
+    openai_messages.extend({"role": item.role, "content": item.content} for item in messages)
+    return openai_messages
+
+
 async def chat_completion(
     messages: list[ChatMessage],
     search_results: list[SearchResult],
@@ -82,15 +96,9 @@ async def chat_completion(
         raise RuntimeError("EVOWIT_OPENAI_API_KEY is not configured")
 
     started = time.perf_counter()
-    openai_messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    context = _search_context(search_results)
-    if context:
-        openai_messages.append({"role": "system", "content": context})
-    openai_messages.extend({"role": item.role, "content": item.content} for item in messages)
-
     payload = {
         "model": settings.openai_model,
-        "messages": openai_messages,
+        "messages": _openai_messages(messages, search_results),
         "temperature": 0.6,
         "stream": False,
     }
@@ -112,6 +120,49 @@ async def chat_completion(
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"Unexpected chat response shape: {data}") from exc
     return text or "", elapsed_ms
+
+
+async def chat_completion_stream(
+    messages: list[ChatMessage],
+    search_results: list[SearchResult],
+) -> AsyncIterator[str]:
+    if not settings.openai_api_key:
+        raise RuntimeError("EVOWIT_OPENAI_API_KEY is not configured")
+
+    payload = {
+        "model": settings.openai_model,
+        "messages": _openai_messages(messages, search_results),
+        "temperature": 0.6,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=settings.openai_timeout_seconds) as client:
+        async with client.stream(
+            "POST",
+            f"{settings.openai_base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line.removeprefix("data:").strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    delta = chunk["choices"][0].get("delta", {}).get("content")
+                except (KeyError, IndexError, TypeError):
+                    delta = None
+                if delta:
+                    yield delta
 
 
 def wav_duration_seconds(audio: bytes) -> float | None:

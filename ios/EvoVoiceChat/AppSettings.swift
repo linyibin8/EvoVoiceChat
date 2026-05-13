@@ -3,16 +3,19 @@ import SwiftUI
 
 @MainActor
 final class AppSettings: ObservableObject {
-    @AppStorage("backendURL") var backendURL: String = "https://evovoice.evowit.com" {
+    @AppStorage("backendURL") var backendURL: String = "http://100.64.0.2:30190" {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("sourceDomains") var sourceDomains: String = "" {
+    @AppStorage("sourceDomains") var sourceDomains: String = "news.qq.com,finance.sina.com.cn,36kr.com,wallstreetcn.com,reuters.com" {
         willSet { objectWillChange.send() }
     }
     @AppStorage("searchEnabled") var searchEnabled: Bool = true {
         willSet { objectWillChange.send() }
     }
     @AppStorage("handsFreeMode") var handsFreeMode: Bool = false {
+        willSet { objectWillChange.send() }
+    }
+    @AppStorage("preferOnDeviceSpeech") var preferOnDeviceSpeech: Bool = true {
         willSet { objectWillChange.send() }
     }
     @AppStorage("ttsVoice") var ttsVoice: String = "default" {

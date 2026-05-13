@@ -1,13 +1,12 @@
 import AVFoundation
 import Foundation
 
-@MainActor
-final class AudioPlaybackService: NSObject, @preconcurrency AVAudioPlayerDelegate {
+final class AudioPlaybackService: NSObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
-    private var completion: ((Bool) -> Void)?
+    private var completion: (() -> Void)?
     var onStateChange: ((Bool) -> Void)?
 
-    func play(fileURL: URL, completion: ((Bool) -> Void)? = nil) throws {
+    func play(fileURL: URL, completion: (() -> Void)? = nil) throws {
         stop()
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
@@ -25,7 +24,7 @@ final class AudioPlaybackService: NSObject, @preconcurrency AVAudioPlayerDelegat
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 do {
-                    try play(fileURL: fileURL) { _ in
+                    try play(fileURL: fileURL) {
                         continuation.resume()
                     }
                 } catch {
@@ -33,26 +32,24 @@ final class AudioPlaybackService: NSObject, @preconcurrency AVAudioPlayerDelegat
                 }
             }
         } onCancel: {
-            Task { @MainActor in
-                self.stop()
-            }
+            self.stop()
         }
     }
 
     func stop() {
-        player?.stop()
-        player = nil
         let completion = completion
         self.completion = nil
+        player?.stop()
+        player = nil
         onStateChange?(false)
-        completion?(false)
+        completion?()
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         self.player = nil
-        let completion = completion
-        self.completion = nil
         onStateChange?(false)
-        completion?(flag)
+        let completion = self.completion
+        self.completion = nil
+        completion?()
     }
 }
