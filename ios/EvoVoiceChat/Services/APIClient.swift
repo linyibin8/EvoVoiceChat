@@ -90,19 +90,26 @@ final class APIClient {
 
         var eventName = "message"
         var dataLines: [String] = []
+        func flushEvent() throws {
+            try handleStreamEvent(name: eventName, dataLines: dataLines, onEvent: onEvent)
+            eventName = "message"
+            dataLines.removeAll(keepingCapacity: true)
+        }
+
         for try await line in bytes.lines {
             if line.hasPrefix("event:") {
+                if !dataLines.isEmpty {
+                    try flushEvent()
+                }
                 eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("data:") {
                 dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
-            } else if line.isEmpty {
-                try handleStreamEvent(name: eventName, dataLines: dataLines, onEvent: onEvent)
-                eventName = "message"
-                dataLines.removeAll(keepingCapacity: true)
+            } else if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try flushEvent()
             }
         }
         if !dataLines.isEmpty {
-            try handleStreamEvent(name: eventName, dataLines: dataLines, onEvent: onEvent)
+            try flushEvent()
         }
     }
 
