@@ -43,6 +43,12 @@ powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Pro
 
 The LAN profile for `100.64.0.2 -> 192.168.0.11` is also available as `server-to-local`, but use it only when that route is reachable. Runtime secrets stay in `backend/.env`.
 
+To safely enter a local API key without putting it in shell history:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-lan -PromptApiKey -Restart
+```
+
 ## iOS build
 
 The project uses XcodeGen.

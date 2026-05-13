@@ -2,6 +2,7 @@ param(
   [ValidateSet("local-lan", "server-to-local", "server-to-local-tailscale", "tailscale")]
   [string]$Profile = "local-lan",
   [string]$ApiKey,
+  [switch]$PromptApiKey,
   [switch]$Restart,
   [string]$TaskName = $(if ($env:EVOVOICE_TASK_NAME) { $env:EVOVOICE_TASK_NAME } else { "EvoVoiceChat-Backend-Native" })
 )
@@ -31,6 +32,15 @@ function Write-EvoEnv {
   )
 
   $resolvedApiKey = $ApiKey
+  if ($PromptApiKey -and -not $resolvedApiKey) {
+    $secure = Read-Host "EVOWIT_OPENAI_API_KEY" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+      $resolvedApiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+  }
   if (-not $resolvedApiKey) { $resolvedApiKey = $env:EVOWIT_OPENAI_API_KEY }
   if (-not $resolvedApiKey) { $resolvedApiKey = Get-ExistingEnvValue "EVOWIT_OPENAI_API_KEY" }
   if (-not $resolvedApiKey) { $resolvedApiKey = "" }
