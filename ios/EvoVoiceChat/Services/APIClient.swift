@@ -47,6 +47,41 @@ extension Error {
             return false
         }
     }
+
+    var isRecoverableChatStreamFailure: Bool {
+        if isTransientNetworkFailure {
+            return true
+        }
+
+        if let apiError = self as? APIClientError {
+            switch apiError {
+            case .serverError(let code, _):
+                return [408, 429, 500, 502, 503, 504].contains(code)
+            case .streamError(let message):
+                let lowercased = message.lowercased()
+                let transientFragments = [
+                    "peer closed connection",
+                    "incomplete chunked",
+                    "server disconnected",
+                    "connection reset",
+                    "connection closed",
+                    "timed out",
+                    "timeout",
+                    "temporarily unavailable",
+                    "too many requests",
+                    "bad gateway",
+                    "service unavailable",
+                    "gateway timeout",
+                    "remote protocol"
+                ]
+                return transientFragments.contains { lowercased.contains($0) }
+            default:
+                return false
+            }
+        }
+
+        return false
+    }
 }
 
 enum ChatStreamEvent {

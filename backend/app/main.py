@@ -193,6 +193,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 await llm_queue.put(("error", f"LLM provider failed: {exc}"))
             except RuntimeError as exc:
                 await llm_queue.put(("error", str(exc)))
+            except Exception as exc:
+                await llm_queue.put(("error", f"LLM provider failed: {exc}"))
             finally:
                 await llm_queue.put(("done", None))
 

@@ -164,7 +164,7 @@ final class ChatViewModel: ObservableObject {
         speakAnswer: Bool,
         originalError: Error
     ) async {
-        guard originalError.isTransientNetworkFailure else {
+        guard originalError.isRecoverableChatStreamFailure else {
             isSending = false
             errorMessage = originalError.localizedDescription
             replaceEmptyAssistant(assistantID: assistantID, with: "这次请求失败：\(originalError.localizedDescription)")
