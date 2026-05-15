@@ -63,6 +63,7 @@ function Write-EvoEnv {
     "DELL_TTS_MODEL=voxcpm2",
     "DELL_TTS_VOICE=default",
     "DELL_TTS_TIMEOUT_SECONDS=60",
+    "DELL_TTS_INFERENCE_TIMESTEPS=6",
     "",
     "DELL_STT_BASE_URL=$STTBaseUrl",
     "DELL_STT_MODEL=whisper-1",

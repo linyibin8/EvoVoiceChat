@@ -39,6 +39,7 @@ class Settings:
     tts_model: str = os.getenv("DELL_TTS_MODEL", "voxcpm2")
     tts_voice: str = os.getenv("DELL_TTS_VOICE", "default")
     tts_timeout_seconds: float = _float_env("DELL_TTS_TIMEOUT_SECONDS", 60)
+    tts_inference_timesteps: int = _int_env("DELL_TTS_INFERENCE_TIMESTEPS", 6)
 
     stt_base_url: str = os.getenv("DELL_STT_BASE_URL", "http://192.168.0.13:39050").rstrip("/")
     stt_model: str = os.getenv("DELL_STT_MODEL", "whisper-1")

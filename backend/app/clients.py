@@ -205,6 +205,8 @@ async def synthesize_speech(text: str, voice: str | None = None) -> tuple[bytes,
         "input": text,
         "response_format": "wav",
     }
+    if settings.tts_inference_timesteps > 0:
+        payload["inference_timesteps"] = settings.tts_inference_timesteps
     endpoint = f"{settings.tts_base_url}/v1/audio/speech"
     async with httpx.AsyncClient(
         timeout=settings.tts_timeout_seconds,

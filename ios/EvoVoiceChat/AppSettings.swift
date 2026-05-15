@@ -11,6 +11,7 @@ struct BackendPreset: Identifiable, Hashable {
 final class AppSettings: ObservableObject {
     static let customBackendPresetID = "custom"
     static let defaultBackendURL = "http://192.168.0.11:30190"
+    static let defaultTTSVoice = "A warm young Chinese woman, natural conversational assistant voice, clear pronunciation, slightly fast pace"
     static let backendPresets: [BackendPreset] = [
         BackendPreset(id: "local-lan", name: "本机局域网", url: "http://192.168.0.11:30190"),
         BackendPreset(id: "local-loopback", name: "本机模拟器", url: "http://127.0.0.1:30190"),
@@ -37,15 +38,17 @@ final class AppSettings: ObservableObject {
     @AppStorage("preferOnDeviceSpeech") var preferOnDeviceSpeech: Bool = true {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("ttsVoice") var ttsVoice: String = "default" {
+    @AppStorage("ttsVoice") var ttsVoice: String = AppSettings.defaultTTSVoice {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("stableTTSVoiceApplied") private var stableTTSVoiceApplied: Bool = false
     @AppStorage("maxSearchResults") var maxSearchResults: Int = 6 {
         willSet { objectWillChange.send() }
     }
 
     init() {
         migrateRemoteBackendToLocalLAN()
+        migrateDefaultTTSVoice()
         applyLocalLANTestDefaultsIfNeeded()
     }
 
@@ -70,6 +73,15 @@ final class AppSettings: ObservableObject {
         if current.isEmpty || AppSettings.legacyRemoteBackendURLs.contains(current) {
             backendURL = AppSettings.defaultBackendURL
         }
+    }
+
+    private func migrateDefaultTTSVoice() {
+        guard !stableTTSVoiceApplied else { return }
+        let current = ttsVoice.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || current == "default" {
+            ttsVoice = AppSettings.defaultTTSVoice
+        }
+        stableTTSVoiceApplied = true
     }
 
     private func applyLocalLANTestDefaultsIfNeeded() {

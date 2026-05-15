@@ -40,6 +40,7 @@ async def health() -> dict:
             "base_url": settings.tts_base_url,
             "model": settings.tts_model,
             "voice": settings.tts_voice,
+            "inference_timesteps": settings.tts_inference_timesteps,
         },
         "stt": {
             "base_url": settings.stt_base_url,

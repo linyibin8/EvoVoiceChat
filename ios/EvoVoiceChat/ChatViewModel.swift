@@ -1,5 +1,10 @@
 import Foundation
 
+private struct PreparedSpeechSegment {
+    let fileURL: URL
+    let metrics: TTSMetrics
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = [
@@ -360,19 +365,47 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        while !Task.isCancelled {
-            guard !queuedSpeechSegments.isEmpty else { break }
-            let segment = queuedSpeechSegments.removeFirst()
-            let completed = await synthesizeAndPlaySegment(segment, settings: settings)
+        var currentTask = makeSynthesisTask(settings: settings)
+        while let task = currentTask, !Task.isCancelled {
+            guard let prepared = await awaitSynthesisTask(task) else { break }
+            let nextTask = makeSynthesisTask(settings: settings)
+            let completed = await playPreparedSegment(prepared)
             if !completed {
+                nextTask?.cancel()
                 break
             }
+            currentTask = nextTask ?? makeSynthesisTask(settings: settings)
         }
     }
 
-    private func synthesizeAndPlaySegment(_ text: String, settings: AppSettings) async -> Bool {
+    private func awaitSynthesisTask(_ task: Task<PreparedSpeechSegment?, Never>) async -> PreparedSpeechSegment? {
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func makeSynthesisTask(settings: AppSettings) -> Task<PreparedSpeechSegment?, Never>? {
+        guard let segment = nextQueuedSpeechSegment() else { return nil }
+        return Task { [weak self, settings] in
+            await self?.synthesizeSegment(segment, settings: settings)
+        }
+    }
+
+    private func nextQueuedSpeechSegment() -> String? {
+        while !queuedSpeechSegments.isEmpty {
+            let segment = queuedSpeechSegments.removeFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !segment.isEmpty {
+                return segment
+            }
+        }
+        return nil
+    }
+
+    private func synthesizeSegment(_ text: String, settings: AppSettings) async -> PreparedSpeechSegment? {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanText.isEmpty else { return true }
+        guard !cleanText.isEmpty else { return nil }
         isSynthesizing = true
         synthesisElapsed = 0
         let started = Date()
@@ -394,14 +427,28 @@ final class ChatViewModel: ObservableObject {
             var metrics = result.metrics
             metrics.elapsedSeconds = Date().timeIntervalSince(started)
             lastTTSMetrics = metrics
-            try await player.playAndWait(fileURL: result.fileURL)
-            return !Task.isCancelled
+            return PreparedSpeechSegment(fileURL: result.fileURL, metrics: metrics)
         } catch is CancellationError {
-            return false
+            synthesisTicker?.cancel()
+            isSynthesizing = false
+            return nil
         } catch {
             synthesisTicker?.cancel()
             isSynthesizing = false
             errorMessage = "语音合成失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    private func playPreparedSegment(_ segment: PreparedSpeechSegment) async -> Bool {
+        do {
+            lastTTSMetrics = segment.metrics
+            try await player.playAndWait(fileURL: segment.fileURL)
+            return !Task.isCancelled
+        } catch is CancellationError {
+            return false
+        } catch {
+            errorMessage = "语音播放失败：\(error.localizedDescription)"
             return false
         }
     }
