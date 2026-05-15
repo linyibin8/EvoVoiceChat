@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -61,6 +62,48 @@ CURRENT_QUERY_TERMS = {
     "实时",
     "快讯",
     "消息",
+    "行情",
+}
+CHINA_MARKET_QUERY_TERMS = {
+    "a股",
+    "a 股",
+    "沪深",
+    "上证",
+    "深证",
+    "深成指",
+    "创业板",
+    "科创50",
+    "大盘",
+    "两市",
+    "北向",
+    "主力资金",
+    "资金流向",
+    "成交额",
+    "涨跌",
+    "股市",
+    "股票",
+}
+CHINA_MARKET_DATA_TERMS = {
+    "整体",
+    "表现",
+    "指数",
+    "涨跌",
+    "上涨",
+    "下跌",
+    "成交额",
+    "资金",
+    "主力",
+    "主力资金",
+    "资金流向",
+    "大盘",
+    "两市",
+    "沪深",
+    "上证",
+    "深证",
+    "深成指",
+    "创业板",
+    "科创50",
+    "北向",
     "行情",
 }
 DOC_QUERY_TERMS = {
@@ -136,6 +179,8 @@ HIGH_QUALITY_PROVIDERS = {"brave", "tavily", "searxng"}
 SITEMAP_DOMAIN_LIMIT = 4
 SITEMAP_INDEX_LIMIT = 8
 SITEMAP_URL_LIMIT = 3000
+EASTMONEY_INDEX_SECIDS = "1.000001,0.399001,0.399006,1.000688"
+EASTMONEY_INDEX_FIELDS = "f12,f14,f2,f3,f4,f5,f6,f62,f66,f69,f72,f75,f78,f81,f84,f87,f104,f105,f106"
 
 
 @dataclass(frozen=True)
@@ -224,8 +269,18 @@ def _is_current_query(query: str) -> bool:
     return _has_any_term(query, CURRENT_QUERY_TERMS)
 
 
+def _is_china_market_query(query: str) -> bool:
+    lower = query.lower().replace("ａ", "a")
+    return any(term in lower for term in CHINA_MARKET_QUERY_TERMS)
+
+
+def _is_china_market_data_query(query: str) -> bool:
+    lower = query.lower().replace("ａ", "a")
+    return _is_china_market_query(lower) and any(term in lower for term in CHINA_MARKET_DATA_TERMS)
+
+
 def _use_google_news(query: str) -> bool:
-    return _is_current_query(query) and not _is_docs_query(query)
+    return _is_current_query(query) and not _is_docs_query(query) and not _is_china_market_query(query)
 
 
 def _strip_query_noise(query: str) -> str:
@@ -275,10 +330,15 @@ async def search_latest_news(
     domains = [_normalise_domain(d) for d in (source_domains or []) if _normalise_domain(d)]
     base_query = query.strip()
     provider_limit = min(max(limit * 2, 8), 12)
-    tasks = [
-        _safe_provider_search(provider, base_query, domains, provider_limit)
-        for provider in _providers_for_query(enabled_search_providers(), base_query, bool(domains))
-    ]
+    if not domains and _is_china_market_data_query(base_query):
+        tasks = [_safe_provider_search("a-share-market", base_query, domains, 1)]
+    else:
+        tasks = [
+            _safe_provider_search(provider, base_query, domains, provider_limit)
+            for provider in _providers_for_query(enabled_search_providers(), base_query, bool(domains))
+        ]
+        if not domains and _is_china_market_query(base_query):
+            tasks.insert(0, _safe_provider_search("a-share-market", base_query, domains, 1))
     if domains:
         tasks.insert(0, _safe_provider_search("sitemap", base_query, domains, provider_limit))
     raw_results: list[ProviderResult] = []
@@ -334,6 +394,8 @@ async def _safe_provider_search(
     limit: int,
 ) -> tuple[str, list[SearchResult]]:
     try:
+        if provider == "a-share-market":
+            return provider, await _search_a_share_market(query)
         if provider == "sitemap":
             return provider, await _search_sitemaps(query, domains, limit)
         if provider == "google-news" and _use_google_news(query):
@@ -669,6 +731,119 @@ async def _search_google_news(query: str, domains: list[str], limit: int) -> lis
     return results[:limit]
 
 
+async def _search_a_share_market(query: str) -> list[SearchResult]:
+    async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
+        quote_items, money_items = await asyncio.gather(
+            _fetch_sina_index_quotes(client),
+            _fetch_sina_money_flow(client),
+        )
+    if not quote_items:
+        return []
+    lines = [f"数据时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}（实时行情接口返回，盘中会变化）。"]
+    sh_amount = 0.0
+    sz_amount = 0.0
+    for item in quote_items:
+        name = item["name"]
+        price = item["price"]
+        pct = item["pct"]
+        change = item["change"]
+        amount = item["amount_yuan"]
+        if item["symbol"] == "s_sh000001":
+            sh_amount = amount
+        elif item["symbol"] == "s_sz399001":
+            sz_amount = amount
+        lines.append(
+            f"{name}：{_fmt_number(price)}，{_fmt_signed(change)}点，{_fmt_signed(pct)}%；"
+            f"成交额{_fmt_yuan(amount)}。"
+        )
+    if sh_amount or sz_amount:
+        lines.append(f"沪深两市成交额合计约{_fmt_yuan(sh_amount + sz_amount)}。")
+    if money_items:
+        main_flow = sum(_number(item.get("r0_net")) for item in money_items)
+        net_flow = sum(_number(item.get("netamount")) for item in money_items)
+        rising = sum(1 for item in money_items if _number(item.get("changeratio")) > 0)
+        falling = sum(1 for item in money_items if _number(item.get("changeratio")) < 0)
+        flat = sum(1 for item in money_items if _number(item.get("changeratio")) == 0)
+        lines.append(
+            f"全市场资金流样本{len(money_items)}只股票：上涨{rising}只、下跌{falling}只、平盘{flat}只。"
+        )
+        lines.append(f"全市场主力资金净额约{_fmt_yuan(main_flow)}，整体资金净额约{_fmt_yuan(net_flow)}。")
+        top_in = sorted(money_items, key=lambda item: _number(item.get("r0_net")), reverse=True)[:3]
+        top_out = sorted(money_items, key=lambda item: _number(item.get("r0_net")))[:3]
+        if top_in:
+            lines.append("主力净流入靠前：" + "、".join(_money_flow_name(item) for item in top_in) + "。")
+        if top_out:
+            lines.append("主力净流出靠前：" + "、".join(_money_flow_name(item) for item in top_out) + "。")
+    lines.append("说明：该结果来自新浪实时报价和新浪资金流接口；北向资金若未出现在接口结果中，不要编造，应说明本次只拿到指数、成交额和资金流样本。")
+    return [
+        SearchResult(
+            title="A股今日行情快照：主要指数、成交额与资金流",
+            link="https://finance.sina.com.cn/stock/",
+            source="新浪行情与资金流接口",
+            published_at=datetime.now(timezone.utc).isoformat(),
+            snippet="\n".join(lines)[: settings.web_fetch_max_chars],
+        )
+    ]
+
+
+async def _fetch_sina_index_quotes(client: httpx.AsyncClient) -> list[dict[str, float | str]]:
+    response = await _get_with_retries(
+        client,
+        "https://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sh000688",
+        headers={
+            "User-Agent": SEARCH_USER_AGENT,
+            "Referer": "https://finance.sina.com.cn/",
+            "Accept": "*/*",
+        },
+    )
+    text = response.content.decode("gb18030", errors="replace")
+    items: list[dict[str, float | str]] = []
+    for symbol, payload in re.findall(r"hq_str_(s_[a-z0-9]+)=\"([^\"]*)\"", text):
+        parts = payload.split(",")
+        if len(parts) < 6:
+            continue
+        items.append(
+            {
+                "symbol": symbol,
+                "name": parts[0],
+                "price": _number(parts[1]),
+                "change": _number(parts[2]),
+                "pct": _number(parts[3]),
+                "amount_yuan": _number(parts[5]) * 10_000,
+            }
+        )
+    return items
+
+
+async def _fetch_sina_money_flow(client: httpx.AsyncClient) -> list[dict]:
+    response = await _get_with_retries(
+        client,
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj",
+        params={
+            "page": 1,
+            "num": 6000,
+            "sort": "symbol",
+            "asc": 1,
+            "bankuai": "",
+            "shichang": "",
+        },
+        headers={
+            "User-Agent": SEARCH_USER_AGENT,
+            "Referer": "https://money.finance.sina.com.cn/moneyflow/",
+            "Accept": "application/json, text/plain, */*",
+        },
+    )
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _money_flow_name(item: dict) -> str:
+    return f"{item.get('name') or item.get('symbol')}({_fmt_yuan(_number(item.get('r0_net')))})"
+
+
 async def _search_sitemaps(query: str, domains: list[str], limit: int) -> list[SearchResult]:
     if not domains or limit <= 0:
         return []
@@ -827,9 +1002,15 @@ def _is_google_news_redirect(url: str) -> bool:
     return "news.google.com/rss/articles/" in url.lower()
 
 
+def _is_structured_market_result(result: SearchResult) -> bool:
+    return result.source in {"东方财富行情接口", "新浪行情与资金流接口"}
+
+
 def _score_result(result: SearchResult, provider: str, query: str, domains: list[str]) -> float:
     score = 0.0
-    if provider == "sitemap":
+    if provider == "a-share-market":
+        score += 80.0
+    elif provider == "sitemap":
         score += 20.0
     elif provider in HIGH_QUALITY_PROVIDERS:
         score += 12.0
@@ -907,6 +1088,42 @@ def _parse_published_at(value: str | None) -> datetime | None:
         return None
 
 
+def _number(value: object) -> float:
+    try:
+        if value in (None, "", "-"):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int_number(value: object) -> int:
+    try:
+        if value in (None, "", "-"):
+            return 0
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fmt_number(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _fmt_signed(value: float) -> str:
+    return f"{value:+.2f}"
+
+
+def _fmt_yuan(value: float) -> str:
+    sign = "-" if value < 0 else ""
+    abs_value = abs(value)
+    if abs_value >= 100_000_000:
+        return f"{sign}{abs_value / 100_000_000:.2f}亿元"
+    if abs_value >= 10_000:
+        return f"{sign}{abs_value / 10_000:.2f}万元"
+    return f"{sign}{abs_value:.2f}元"
+
+
 def _merge_results(primary: list[SearchResult], secondary: list[SearchResult], limit: int) -> list[SearchResult]:
     merged: list[SearchResult] = []
     seen: set[str] = set()
@@ -931,7 +1148,7 @@ async def enrich_results_with_page_text(results: list[SearchResult]) -> tuple[li
         for index, item in enumerate(enriched):
             if read_attempts >= top_count:
                 break
-            if _is_google_news_redirect(item.link):
+            if _is_google_news_redirect(item.link) or _is_structured_market_result(item):
                 continue
             read_attempts += 1
             try:
