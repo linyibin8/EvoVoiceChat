@@ -31,6 +31,7 @@ final class ChatViewModel: ObservableObject {
     private var silenceTask: Task<Void, Never>?
     private var queuedSpeechSegments: [String] = []
     private var pendingSpeechText = ""
+    private var streamedSpeechText = ""
     private weak var activeSettings: AppSettings?
 
     private let hardSpeechBreaks: Set<Character> = ["。", "！", "？", "!", "?", "\n"]
@@ -108,6 +109,7 @@ final class ChatViewModel: ObservableObject {
         ttsWorkerTask = nil
         queuedSpeechSegments.removeAll()
         pendingSpeechText = ""
+        streamedSpeechText = ""
         silenceTask?.cancel()
         speech.stop()
         player.stop()
@@ -123,6 +125,7 @@ final class ChatViewModel: ObservableObject {
         ttsWorkerTask?.cancel()
         queuedSpeechSegments.removeAll()
         pendingSpeechText = ""
+        streamedSpeechText = ""
         player.stop()
         synthesisTicker?.cancel()
         errorMessage = nil
@@ -180,9 +183,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         errorMessage = "流式连接中断，已自动切换普通请求。"
-        queuedSpeechSegments.removeAll()
-        pendingSpeechText = ""
-        player.stop()
+        let alreadyStreamedForSpeech = speakAnswer ? streamedSpeechText : ""
 
         do {
             let response = try await api.sendChat(messages: requestMessages, prompt: prompt, settings: settings)
@@ -196,7 +197,11 @@ final class ChatViewModel: ObservableObject {
             }
             isSending = false
             guard speakAnswer else { return }
-            pendingSpeechText = response.assistant_text
+            pendingSpeechText += fallbackSpeechTail(
+                fullText: response.assistant_text,
+                alreadyStreamed: alreadyStreamedForSpeech
+            )
+            streamedSpeechText = response.assistant_text
             enqueueReadySpeechSegments(settings: settings, force: true)
             startTTSWorkerIfNeeded(settings: settings)
         } catch {
@@ -223,6 +228,7 @@ final class ChatViewModel: ObservableObject {
             appendToAssistant(assistantID: assistantID, text: text)
             guard speakAnswer else { return }
             pendingSpeechText += text
+            streamedSpeechText += text
             enqueueReadySpeechSegments(settings: settings, force: false)
         case .done(let timings, _):
             mergeTimings(timings)
@@ -341,6 +347,28 @@ final class ChatViewModel: ObservableObject {
     private func drainSpeechText(upTo end: String.Index, to segments: inout [String]) {
         appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
         pendingSpeechText = String(pendingSpeechText[end...])
+    }
+
+    private func fallbackSpeechTail(fullText: String, alreadyStreamed: String) -> String {
+        guard !alreadyStreamed.isEmpty else { return fullText }
+        let commonPrefix = longestCommonPrefixLength(fullText, alreadyStreamed)
+        if commonPrefix == alreadyStreamed.count {
+            return String(fullText.dropFirst(commonPrefix))
+        }
+        guard commonPrefix >= minimumSpeechSegmentCharacters else { return "" }
+        return String(fullText.dropFirst(commonPrefix))
+    }
+
+    private func longestCommonPrefixLength(_ left: String, _ right: String) -> Int {
+        var count = 0
+        var leftIndex = left.startIndex
+        var rightIndex = right.startIndex
+        while leftIndex < left.endIndex, rightIndex < right.endIndex, left[leftIndex] == right[rightIndex] {
+            count += 1
+            leftIndex = left.index(after: leftIndex)
+            rightIndex = right.index(after: rightIndex)
+        }
+        return count
     }
 
     private func firstSpeechBreakEnd(
