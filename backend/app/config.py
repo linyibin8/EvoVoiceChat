@@ -28,6 +28,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     profile: str = os.getenv("EVOVOICE_PROFILE", "custom")
@@ -59,11 +66,23 @@ class Settings:
     news_timeout_seconds: float = _float_env("NEWS_SEARCH_TIMEOUT_SECONDS", 12)
     news_max_results: int = _int_env("NEWS_SEARCH_MAX_RESULTS", 6)
 
+    web_search_provider_order: str = os.getenv(
+        "WEB_SEARCH_PROVIDER_ORDER",
+        "brave,tavily,searxng,duckduckgo,bing,google-news",
+    )
+    brave_search_api_key: str = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+    brave_search_base_url: str = os.getenv("BRAVE_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web").rstrip("/")
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "").strip()
+    tavily_search_base_url: str = os.getenv("TAVILY_SEARCH_BASE_URL", "https://api.tavily.com").rstrip("/")
+    searxng_base_url: str = os.getenv("SEARXNG_BASE_URL", "").rstrip("/")
+
     bing_search_base_url: str = os.getenv("BING_SEARCH_BASE_URL", "https://www.bing.com").rstrip("/")
     web_search_timeout_seconds: float = _float_env("WEB_SEARCH_TIMEOUT_SECONDS", 12)
     web_fetch_timeout_seconds: float = _float_env("WEB_FETCH_TIMEOUT_SECONDS", 12)
-    web_fetch_top_results: int = _int_env("WEB_FETCH_TOP_RESULTS", 1)
+    web_fetch_top_results: int = _int_env("WEB_FETCH_TOP_RESULTS", 2)
     web_fetch_max_chars: int = _int_env("WEB_FETCH_MAX_CHARS", 1200)
+    web_read_jina_fallback: bool = _bool_env("WEB_READ_JINA_FALLBACK", True)
+    web_read_jina_min_chars: int = _int_env("WEB_READ_JINA_MIN_CHARS", 500)
 
 
 settings = Settings()

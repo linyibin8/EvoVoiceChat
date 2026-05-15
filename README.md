@@ -10,7 +10,7 @@ Native iOS voice chat MVP for a Yuanbao/Doubao-style assistant.
   - Streaming chat completions via Server-Sent Events (`/api/chat/stream`) for incremental UI updates.
   - Dell VoxCPM2 TTS (`/v1/audio/speech`) with speed headers.
   - Dell Whisper STT (`/v1/audio/transcriptions`) for fallback transcription.
-  - Latest-news search via Google News RSS fallback, with source-domain filters.
+  - Web/news search through a provider chain: Brave/Tavily/SearXNG when configured, DuckDuckGo/Bing/Google News fallback without keys, source-domain filters, and webpage text excerpts.
   - iOS segmented TTS playback: stream text first, synthesize completed sentence chunks, and play the queue while later text is still arriving.
 
 ## Local backend
@@ -24,7 +24,7 @@ backend\.venv\Scripts\pip install -r backend\requirements.txt
 powershell -ExecutionPolicy Bypass -File scripts\run_backend.ps1
 ```
 
-Default backend URL for the iOS app is `http://192.168.0.11:30190`, so a phone on the same LAN can call this machine directly. This local test build migrates older public/Tailscale settings back to the LAN backend on first launch and starts with web search off so LAN/model/TTS latency can be isolated.
+Default backend URL for the iOS app is `http://192.168.0.11:30190`, so a phone on the same LAN can call this machine directly. This local test build migrates older public/Tailscale settings back to the LAN backend on first launch.
 
 ## Backend profiles
 
@@ -54,6 +54,21 @@ powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Pro
 ```
 
 `server-to-local` is kept as an alias for `server-to-local-lan`. Use it only when `100.64.0.2` can route to `192.168.0.11` and `192.168.0.13`; otherwise use the local backend directly from the phone with `http://192.168.0.11:30190`. Runtime secrets stay in `backend/.env`.
+
+## Web search
+
+The backend search switch works without extra keys by using DuckDuckGo, Bing page parsing, and Google News RSS. For higher-quality production search, add one or more providers to `backend/.env`:
+
+```powershell
+WEB_SEARCH_PROVIDER_ORDER=brave,tavily,searxng,duckduckgo,bing,google-news
+BRAVE_SEARCH_API_KEY=...
+TAVILY_API_KEY=...
+SEARXNG_BASE_URL=http://127.0.0.1:8080
+WEB_FETCH_TOP_RESULTS=2
+WEB_READ_JINA_FALLBACK=true
+```
+
+`SearXNG` can be self-hosted with the template under `deploy/searxng/`. When regular webpage extraction is blocked or too short, the backend can fall back to Jina Reader for public webpage text.
 
 To safely enter a local API key without putting it in shell history:
 

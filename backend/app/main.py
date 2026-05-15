@@ -13,7 +13,7 @@ from httpx import HTTPError
 from .clients import chat_completion, chat_completion_stream, synthesize_speech, transcribe_audio
 from .config import settings
 from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest, WebReadRequest, WebReadResponse, WebSearchRequest
-from .news import enrich_results_with_page_text, read_web_page, search_latest_news
+from .news import enabled_search_providers, enrich_results_with_page_text, read_web_page, search_latest_news
 
 
 app = FastAPI(title="EvoVoiceChat API", version="0.2.4")
@@ -48,9 +48,10 @@ async def health() -> dict:
             "model": settings.stt_model,
         },
         "news": {
-            "provider": "bing-web+google-news-rss",
+            "provider": "+".join(enabled_search_providers()),
             "max_results": settings.news_max_results,
             "fetch_top_results": settings.web_fetch_top_results,
+            "jina_fallback": settings.web_read_jina_fallback,
         },
     }
 

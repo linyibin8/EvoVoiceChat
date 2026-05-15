@@ -29,10 +29,11 @@ final class AppSettings: ObservableObject {
     @AppStorage("sourceDomains") var sourceDomains: String = "news.qq.com,finance.sina.com.cn,36kr.com,wallstreetcn.com,reuters.com" {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("searchEnabled") var searchEnabled: Bool = false {
+    @AppStorage("searchEnabled") var searchEnabled: Bool = true {
         willSet { objectWillChange.send() }
     }
     @AppStorage("localLANTestModeApplied") private var localLANTestModeApplied: Bool = false
+    @AppStorage("webSearchDefaultEnabledApplied") private var webSearchDefaultEnabledApplied: Bool = false
     @AppStorage("handsFreeMode") var handsFreeMode: Bool = false {
         willSet { objectWillChange.send() }
     }
@@ -51,6 +52,7 @@ final class AppSettings: ObservableObject {
         migrateRemoteBackendToLocalLAN()
         migrateDefaultTTSVoice()
         applyLocalLANTestDefaultsIfNeeded()
+        enableWebSearchByDefaultIfNeeded()
     }
 
     var normalizedBackendURL: URL? {
@@ -89,6 +91,12 @@ final class AppSettings: ObservableObject {
         guard !localLANTestModeApplied else { return }
         searchEnabled = false
         localLANTestModeApplied = true
+    }
+
+    private func enableWebSearchByDefaultIfNeeded() {
+        guard !webSearchDefaultEnabledApplied else { return }
+        searchEnabled = true
+        webSearchDefaultEnabledApplied = true
     }
 
     var parsedSourceDomains: [String] {
