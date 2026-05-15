@@ -1,5 +1,10 @@
 import Foundation
 
+private struct PreparedSpeechSegment {
+    let fileURL: URL
+    let metrics: TTSMetrics
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = [
@@ -30,6 +35,9 @@ final class ChatViewModel: ObservableObject {
 
     private let hardSpeechBreaks: Set<Character> = ["。", "！", "？", "!", "?", "\n"]
     private let softSpeechBreaks: Set<Character> = ["，", ",", "；", ";", "：", ":"]
+    private let minimumSpeechSegmentCharacters = 28
+    private let targetSpeechSegmentCharacters = 64
+    private let maximumSpeechSegmentCharacters = 96
 
     init() {
         speech.onTranscript = { [weak self] transcript, _ in
@@ -164,7 +172,7 @@ final class ChatViewModel: ObservableObject {
         speakAnswer: Bool,
         originalError: Error
     ) async {
-        guard originalError.isTransientNetworkFailure else {
+        guard originalError.isRecoverableChatStreamFailure else {
             isSending = false
             errorMessage = originalError.localizedDescription
             replaceEmptyAssistant(assistantID: assistantID, with: "这次请求失败：\(originalError.localizedDescription)")
@@ -300,27 +308,75 @@ final class ChatViewModel: ObservableObject {
 
     private func drainSpeechSegments(force: Bool) -> [String] {
         var segments: [String] = []
-        while let breakIndex = pendingSpeechText.firstIndex(where: { hardSpeechBreaks.contains($0) }) {
-            let end = pendingSpeechText.index(after: breakIndex)
-            appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-            pendingSpeechText = String(pendingSpeechText[end...])
+        while let end = firstSpeechBreakEnd(
+            in: pendingSpeechText,
+            breaks: hardSpeechBreaks,
+            minimumCharacters: minimumSpeechSegmentCharacters
+        ) {
+            drainSpeechText(upTo: end, to: &segments)
         }
 
         if force {
             appendSpeechSegment(pendingSpeechText, to: &segments)
             pendingSpeechText = ""
-        } else if pendingSpeechText.count >= 48 {
-            if let breakIndex = pendingSpeechText.firstIndex(where: { softSpeechBreaks.contains($0) }) {
-                let end = pendingSpeechText.index(after: breakIndex)
-                appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-                pendingSpeechText = String(pendingSpeechText[end...])
-            } else if pendingSpeechText.count >= 72 {
-                let end = pendingSpeechText.index(pendingSpeechText.startIndex, offsetBy: 48)
-                appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-                pendingSpeechText = String(pendingSpeechText[end...])
+        } else if pendingSpeechText.count >= targetSpeechSegmentCharacters {
+            if let end = bestSpeechBreakEnd(
+                in: pendingSpeechText,
+                breaks: softSpeechBreaks,
+                minimumCharacters: minimumSpeechSegmentCharacters,
+                maximumCharacters: targetSpeechSegmentCharacters
+            ) {
+                drainSpeechText(upTo: end, to: &segments)
+            } else if pendingSpeechText.count >= maximumSpeechSegmentCharacters {
+                let end = pendingSpeechText.index(
+                    pendingSpeechText.startIndex,
+                    offsetBy: targetSpeechSegmentCharacters
+                )
+                drainSpeechText(upTo: end, to: &segments)
             }
         }
         return segments
+    }
+
+    private func drainSpeechText(upTo end: String.Index, to segments: inout [String]) {
+        appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
+        pendingSpeechText = String(pendingSpeechText[end...])
+    }
+
+    private func firstSpeechBreakEnd(
+        in text: String,
+        breaks: Set<Character>,
+        minimumCharacters: Int
+    ) -> String.Index? {
+        var characterCount = 0
+        for index in text.indices {
+            characterCount += 1
+            if characterCount >= minimumCharacters, breaks.contains(text[index]) {
+                return text.index(after: index)
+            }
+        }
+        return nil
+    }
+
+    private func bestSpeechBreakEnd(
+        in text: String,
+        breaks: Set<Character>,
+        minimumCharacters: Int,
+        maximumCharacters: Int
+    ) -> String.Index? {
+        var characterCount = 0
+        var bestEnd: String.Index?
+        for index in text.indices {
+            characterCount += 1
+            guard characterCount >= minimumCharacters, breaks.contains(text[index]) else { continue }
+            let end = text.index(after: index)
+            if characterCount <= maximumCharacters {
+                bestEnd = end
+            } else {
+                return bestEnd ?? end
+            }
+        }
+        return bestEnd
     }
 
     private func appendSpeechSegment(_ rawText: String, to segments: inout [String]) {
@@ -360,19 +416,47 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        while !Task.isCancelled {
-            guard !queuedSpeechSegments.isEmpty else { break }
-            let segment = queuedSpeechSegments.removeFirst()
-            let completed = await synthesizeAndPlaySegment(segment, settings: settings)
+        var currentTask = makeSynthesisTask(settings: settings)
+        while let task = currentTask, !Task.isCancelled {
+            guard let prepared = await awaitSynthesisTask(task) else { break }
+            let nextTask = makeSynthesisTask(settings: settings)
+            let completed = await playPreparedSegment(prepared)
             if !completed {
+                nextTask?.cancel()
                 break
             }
+            currentTask = nextTask ?? makeSynthesisTask(settings: settings)
         }
     }
 
-    private func synthesizeAndPlaySegment(_ text: String, settings: AppSettings) async -> Bool {
+    private func awaitSynthesisTask(_ task: Task<PreparedSpeechSegment?, Never>) async -> PreparedSpeechSegment? {
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func makeSynthesisTask(settings: AppSettings) -> Task<PreparedSpeechSegment?, Never>? {
+        guard let segment = nextQueuedSpeechSegment() else { return nil }
+        return Task { [weak self, settings] in
+            await self?.synthesizeSegment(segment, settings: settings)
+        }
+    }
+
+    private func nextQueuedSpeechSegment() -> String? {
+        while !queuedSpeechSegments.isEmpty {
+            let segment = queuedSpeechSegments.removeFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !segment.isEmpty {
+                return segment
+            }
+        }
+        return nil
+    }
+
+    private func synthesizeSegment(_ text: String, settings: AppSettings) async -> PreparedSpeechSegment? {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanText.isEmpty else { return true }
+        guard !cleanText.isEmpty else { return nil }
         isSynthesizing = true
         synthesisElapsed = 0
         let started = Date()
@@ -394,14 +478,28 @@ final class ChatViewModel: ObservableObject {
             var metrics = result.metrics
             metrics.elapsedSeconds = Date().timeIntervalSince(started)
             lastTTSMetrics = metrics
-            try await player.playAndWait(fileURL: result.fileURL)
-            return !Task.isCancelled
+            return PreparedSpeechSegment(fileURL: result.fileURL, metrics: metrics)
         } catch is CancellationError {
-            return false
+            synthesisTicker?.cancel()
+            isSynthesizing = false
+            return nil
         } catch {
             synthesisTicker?.cancel()
             isSynthesizing = false
             errorMessage = "语音合成失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    private func playPreparedSegment(_ segment: PreparedSpeechSegment) async -> Bool {
+        do {
+            lastTTSMetrics = segment.metrics
+            try await player.playAndWait(fileURL: segment.fileURL)
+            return !Task.isCancelled
+        } catch is CancellationError {
+            return false
+        } catch {
+            errorMessage = "语音播放失败：\(error.localizedDescription)"
             return false
         }
     }

@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -19,6 +19,11 @@ TAG_RE = re.compile(r"<[^>]+>")
 WHITESPACE_RE = re.compile(r"\s+")
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+SEARCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36 EvoVoiceChat/0.2"
+)
 STOPWORDS = {
     "the",
     "and",
@@ -68,6 +73,29 @@ def _domain_from_url(url: str) -> str | None:
         return None
 
 
+def _normalize_domain(value: str) -> str:
+    domain = value.strip().lower()
+    if "://" in domain:
+        domain = urlparse(domain).netloc.lower()
+    domain = domain.strip("/")
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def _domain_matches(candidate: str | None, allowed_domains: list[str]) -> bool:
+    if not candidate:
+        return False
+    normalized = _normalize_domain(candidate)
+    return any(normalized == domain or normalized.endswith(f".{domain}") for domain in allowed_domains)
+
+
+def _result_matches_domains(result: SearchResult, allowed_domains: list[str]) -> bool:
+    if not allowed_domains:
+        return True
+    return _domain_matches(_domain_from_url(result.link), allowed_domains) or _domain_matches(result.source, allowed_domains)
+
+
 async def search_latest_news(
     query: str,
     source_domains: list[str] | None = None,
@@ -75,23 +103,59 @@ async def search_latest_news(
 ) -> tuple[list[SearchResult], float]:
     started = time.perf_counter()
     limit = max(1, min(max_results or settings.news_max_results, 12))
-    domains = [d.strip().lower() for d in (source_domains or []) if d.strip()]
+    domains = [_normalize_domain(d) for d in (source_domains or []) if d.strip()]
     base_query = query.strip()
     results: list[SearchResult] = []
-    try:
-        results = await _search_bing(base_query, domains, limit)
-        if len(results) < min(3, limit) and domains:
-            unrestricted = await _search_bing(base_query, [], limit - len(results))
-            results = _merge_results(results, unrestricted, limit)
-    except httpx.HTTPError:
-        results = []
-    if not results:
+    for provider in enabled_search_providers():
+        if len(results) >= limit:
+            break
         try:
-            results = await _search_google_news(base_query, domains, limit)
+            provider_results = await _search_provider(provider, base_query, domains, limit - len(results))
+            if domains:
+                provider_results = [item for item in provider_results if _result_matches_domains(item, domains)]
+            results = _merge_results(results, provider_results, limit)
         except httpx.HTTPError:
-            results = []
+            continue
     elapsed_ms = (time.perf_counter() - started) * 1000
     return results, elapsed_ms
+
+
+def enabled_search_providers() -> list[str]:
+    configured: list[str] = []
+    seen: set[str] = set()
+    for raw in settings.web_search_provider_order.split(","):
+        provider = raw.strip().lower().replace("_", "-")
+        if not provider or provider in seen:
+            continue
+        if provider == "brave" and not settings.brave_search_api_key:
+            continue
+        if provider == "tavily" and not settings.tavily_api_key:
+            continue
+        if provider == "searxng" and not settings.searxng_base_url:
+            continue
+        if provider not in {"brave", "tavily", "searxng", "duckduckgo", "bing", "google-news"}:
+            continue
+        configured.append(provider)
+        seen.add(provider)
+    return configured or ["duckduckgo", "bing", "google-news"]
+
+
+async def _search_provider(provider: str, query: str, domains: list[str], limit: int) -> list[SearchResult]:
+    if limit <= 0:
+        return []
+    if provider == "brave":
+        return await _search_brave(query, domains, limit)
+    if provider == "tavily":
+        return await _search_tavily(query, domains, limit)
+    if provider == "searxng":
+        return await _search_searxng(query, domains, limit)
+    if provider == "duckduckgo":
+        return await _search_duckduckgo(query, domains, limit)
+    if provider == "bing":
+        return await _search_bing(query, domains, limit)
+    if provider == "google-news":
+        return await _search_google_news(query, domains, limit)
+    return []
 
 
 async def _get_with_retries(
@@ -136,8 +200,192 @@ async def _sleep_retry(attempt: int) -> None:
     await asyncio.sleep(0.5 * (attempt + 1))
 
 
+def _domain_queries(query: str, domains: list[str]) -> list[str]:
+    return [query] if not domains else [f"{query} site:{domain}" for domain in domains]
+
+
+async def _search_brave(query: str, domains: list[str], limit: int) -> list[SearchResult]:
+    queries = _domain_queries(query, domains)
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": SEARCH_USER_AGENT,
+        "X-Subscription-Token": settings.brave_search_api_key,
+    }
+    async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
+        for item_query in queries:
+            if len(results) >= limit:
+                break
+            response = await _get_with_retries(
+                client,
+                f"{settings.brave_search_base_url}/search",
+                params={"q": item_query, "count": min(limit, 20), "search_lang": "zh-hans"},
+                headers=headers,
+            )
+            data = response.json()
+            for item in data.get("web", {}).get("results", []):
+                href = str(item.get("url") or "").strip()
+                title = _clean(str(item.get("title") or ""))
+                if not href or href in seen or not title:
+                    continue
+                candidate = SearchResult(
+                    title=title,
+                    link=href,
+                    source=_domain_from_url(href) or item.get("profile", {}).get("name"),
+                    published_at=item.get("age"),
+                    snippet=_clean(str(item.get("description") or ""))[:500] or None,
+                )
+                if not _is_relevant(query, candidate):
+                    continue
+                seen.add(href)
+                results.append(candidate)
+                if len(results) >= limit:
+                    break
+    return results[:limit]
+
+
+async def _search_tavily(query: str, domains: list[str], limit: int) -> list[SearchResult]:
+    payload: dict[str, object] = {
+        "query": query,
+        "search_depth": "basic",
+        "max_results": min(limit, 10),
+        "include_answer": False,
+        "include_raw_content": True,
+    }
+    if domains:
+        payload["include_domains"] = domains
+    headers = {
+        "Authorization": f"Bearer {settings.tavily_api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": SEARCH_USER_AGENT,
+    }
+    async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
+        response = await client.post(
+            f"{settings.tavily_search_base_url}/search",
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        data = response.json()
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    for item in data.get("results", []):
+        href = str(item.get("url") or "").strip()
+        title = _clean(str(item.get("title") or ""))
+        if not href or href in seen or not title:
+            continue
+        content = _clean(str(item.get("content") or ""))
+        raw_content = _clean(str(item.get("raw_content") or ""))
+        snippet = raw_content or content
+        candidate = SearchResult(
+            title=title,
+            link=href,
+            source=_domain_from_url(href),
+            published_at=item.get("published_date"),
+            snippet=snippet[: settings.web_fetch_max_chars] if snippet else None,
+        )
+        if not _is_relevant(query, candidate):
+            continue
+        seen.add(href)
+        results.append(candidate)
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def _search_searxng(query: str, domains: list[str], limit: int) -> list[SearchResult]:
+    queries = _domain_queries(query, domains)
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
+        for item_query in queries:
+            if len(results) >= limit:
+                break
+            response = await _get_with_retries(
+                client,
+                f"{settings.searxng_base_url}/search",
+                params={
+                    "q": item_query,
+                    "format": "json",
+                    "language": "zh-CN",
+                    "safesearch": 0,
+                },
+                headers={"User-Agent": SEARCH_USER_AGENT},
+            )
+            data = response.json()
+            for item in data.get("results", []):
+                href = str(item.get("url") or "").strip()
+                title = _clean(str(item.get("title") or ""))
+                if not href or href in seen or not title:
+                    continue
+                candidate = SearchResult(
+                    title=title,
+                    link=href,
+                    source=_domain_from_url(href) or item.get("engine"),
+                    published_at=item.get("publishedDate"),
+                    snippet=_clean(str(item.get("content") or ""))[:500] or None,
+                )
+                if not _is_relevant(query, candidate):
+                    continue
+                seen.add(href)
+                results.append(candidate)
+                if len(results) >= limit:
+                    break
+    return results[:limit]
+
+
+async def _search_duckduckgo(query: str, domains: list[str], limit: int) -> list[SearchResult]:
+    queries = _domain_queries(query, domains)
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
+        for item_query in queries:
+            if len(results) >= limit:
+                break
+            response = await _get_with_retries(
+                client,
+                "https://duckduckgo.com/html/",
+                params={"q": item_query, "kl": "cn-zh"},
+                headers={"User-Agent": SEARCH_USER_AGENT},
+            )
+            soup = BeautifulSoup(response.text, "html.parser")
+            for item in soup.select(".result"):
+                link = item.select_one("a.result__a")
+                if not link:
+                    continue
+                href = _duckduckgo_result_url(str(link.get("href") or ""))
+                if not href.startswith(("http://", "https://")) or href in seen:
+                    continue
+                title = link.get_text(" ", strip=True)
+                snippet_node = item.select_one(".result__snippet")
+                snippet = snippet_node.get_text(" ", strip=True) if snippet_node else ""
+                candidate = SearchResult(
+                    title=title,
+                    link=href,
+                    source=_domain_from_url(href),
+                    published_at=None,
+                    snippet=snippet[:500] if snippet else None,
+                )
+                if not title or not _is_relevant(query, candidate):
+                    continue
+                seen.add(href)
+                results.append(candidate)
+                if len(results) >= limit:
+                    break
+    return results[:limit]
+
+
+def _duckduckgo_result_url(href: str) -> str:
+    if href.startswith("//duckduckgo.com/l/?") or href.startswith("/l/?"):
+        parsed = urlparse(href)
+        encoded = parse_qs(parsed.query).get("uddg", [href])[0]
+        return unquote(encoded)
+    return href
+
+
 async def _search_bing(query: str, domains: list[str], limit: int) -> list[SearchResult]:
-    queries = [query] if not domains else [f"{query} site:{domain}" for domain in domains]
+    queries = _domain_queries(query, domains)
     results: list[SearchResult] = []
     seen: set[str] = set()
     async with httpx.AsyncClient(timeout=settings.web_search_timeout_seconds, follow_redirects=True) as client:
@@ -148,7 +396,7 @@ async def _search_bing(query: str, domains: list[str], limit: int) -> list[Searc
                 f"{settings.bing_search_base_url}/search?"
                 f"q={quote_plus(item_query)}&mkt=zh-CN&setlang=zh-Hans"
             )
-            response = await _get_with_retries(client, url, headers={"User-Agent": "EvoVoiceChat/0.1"})
+            response = await _get_with_retries(client, url, headers={"User-Agent": SEARCH_USER_AGENT})
             soup = BeautifulSoup(response.text, "html.parser")
             for item in soup.select("li.b_algo"):
                 link = item.find("a", href=True)
@@ -177,7 +425,7 @@ async def _search_bing(query: str, domains: list[str], limit: int) -> list[Searc
 
 
 async def _search_google_news(query: str, domains: list[str], limit: int) -> list[SearchResult]:
-    queries = [query] if not domains else [f"{query} site:{domain}" for domain in domains]
+    queries = _domain_queries(query, domains)
     results: list[SearchResult] = []
     seen: set[str] = set()
     async with httpx.AsyncClient(timeout=settings.news_timeout_seconds, follow_redirects=True) as client:
@@ -188,7 +436,7 @@ async def _search_google_news(query: str, domains: list[str], limit: int) -> lis
                 "https://news.google.com/rss/search?"
                 f"q={quote_plus(item_query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
             )
-            response = await _get_with_retries(client, rss_url, headers={"User-Agent": "EvoVoiceChat/0.1"})
+            response = await _get_with_retries(client, rss_url, headers={"User-Agent": SEARCH_USER_AGENT})
             root = ET.fromstring(response.content)
             for item in root.findall("./channel/item"):
                 title = _clean(item.findtext("title"))
@@ -253,11 +501,29 @@ async def enrich_results_with_page_text(results: list[SearchResult]) -> tuple[li
 
 
 async def read_web_page(client: httpx.AsyncClient, url: str, max_chars: int | None = None) -> tuple[str | None, str]:
+    max_length = max_chars or settings.web_fetch_max_chars
+    try:
+        title, text = await _read_web_page_direct(client, url, max_length)
+    except Exception:
+        if not settings.web_read_jina_fallback:
+            raise
+        return await _read_web_page_jina(client, url, max_length)
+    if settings.web_read_jina_fallback and len(text) < settings.web_read_jina_min_chars:
+        try:
+            jina_title, jina_text = await _read_web_page_jina(client, url, max_length)
+            if len(jina_text) > len(text):
+                return jina_title or title, jina_text
+        except Exception:
+            pass
+    return title, text
+
+
+async def _read_web_page_direct(client: httpx.AsyncClient, url: str, max_chars: int) -> tuple[str | None, str]:
     response = await _get_with_retries(
         client,
         url,
         headers={
-            "User-Agent": "EvoVoiceChat/0.1",
+            "User-Agent": SEARCH_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         },
     )
@@ -270,7 +536,25 @@ async def read_web_page(client: httpx.AsyncClient, url: str, max_chars: int | No
     title = soup.title.get_text(" ", strip=True) if soup.title else None
     main = soup.find("article") or soup.find("main") or soup.body or soup
     text = WHITESPACE_RE.sub(" ", main.get_text(" ", strip=True)).strip()
-    return title, text[: max_chars or settings.web_fetch_max_chars]
+    return title, text[:max_chars]
+
+
+async def _read_web_page_jina(client: httpx.AsyncClient, url: str, max_chars: int) -> tuple[str | None, str]:
+    response = await _get_with_retries(
+        client,
+        f"https://r.jina.ai/http://{url}",
+        headers={
+            "User-Agent": SEARCH_USER_AGENT,
+            "Accept": "text/plain, text/markdown, */*",
+        },
+    )
+    text = response.text.strip()
+    title = None
+    for line in text.splitlines()[:8]:
+        if line.startswith("Title:"):
+            title = line.removeprefix("Title:").strip()
+            break
+    return title, WHITESPACE_RE.sub(" ", text).strip()[:max_chars]
 
 
 def _query_terms(query: str) -> list[str]:

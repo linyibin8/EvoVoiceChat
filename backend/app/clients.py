@@ -17,9 +17,9 @@ from .models import ChatMessage, SearchResult
 
 SYSTEM_PROMPT = """你是 Evo Voice，一个自然、可靠、适合语音对话的中文 AI 助手。
 回答要像真人聊天一样顺畅，优先给结论，再给必要细节。
-如果提供了联网搜索结果，必须基于搜索结果回答最新新闻或事实问题，并在关键句后标注来源编号，例如 [1]。
-搜索结果可能包含网页正文摘录；优先使用正文摘录，其次使用标题和摘要。
-如果搜索结果不足，要说“这次联网搜索没有找到足够可靠的新结果”，不要说自己没有联网工具，也不要编造。"""
+如果提供了联网搜索结果，必须优先基于搜索结果回答最新新闻、价格、版本、政策、人物职位、赛程、公司动态等时效性问题，并在关键句后标注来源编号，例如 [1]。
+搜索结果可能包含网页正文摘录；可信优先级是：网页正文摘录 > 摘要 > 标题，不要只凭标题下结论。
+如果搜索结果为空、互相矛盾、来源明显不可靠，或没有覆盖用户问题的关键点，要说“这次联网搜索没有找到足够可靠的新结果”，说明还缺什么信息；不要说自己没有联网工具，也不要用模型记忆编造最新事实。"""
 
 TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
@@ -205,6 +205,16 @@ async def synthesize_speech(text: str, voice: str | None = None) -> tuple[bytes,
         "input": text,
         "response_format": "wav",
     }
+    if settings.tts_reference_audio:
+        payload["voice"] = "voxcpm:auto"
+        payload["ref_audio"] = settings.tts_reference_audio
+        if settings.tts_prompt_audio and settings.tts_prompt_text:
+            payload["prompt_audio"] = settings.tts_prompt_audio
+            payload["prompt_text"] = settings.tts_prompt_text
+    if settings.tts_cfg_value > 0:
+        payload["cfg_value"] = settings.tts_cfg_value
+    if settings.tts_inference_timesteps > 0:
+        payload["inference_timesteps"] = settings.tts_inference_timesteps
     endpoint = f"{settings.tts_base_url}/v1/audio/speech"
     async with httpx.AsyncClient(
         timeout=settings.tts_timeout_seconds,

@@ -10,12 +10,17 @@ struct BackendPreset: Identifiable, Hashable {
 @MainActor
 final class AppSettings: ObservableObject {
     static let customBackendPresetID = "custom"
-    static let defaultBackendURL = "http://192.168.0.11:30190"
+    static let defaultBackendURL = "https://evovoice.evowit.com"
+    static let defaultTTSVoice = "voxcpm:auto"
+    private static let legacyVoiceDesignPrompt = "A warm young Chinese woman, natural conversational assistant voice, clear pronunciation, slightly fast pace"
     static let backendPresets: [BackendPreset] = [
-        BackendPreset(id: "local-lan", name: "本机局域网", url: "http://192.168.0.11:30190"),
-        BackendPreset(id: "local-loopback", name: "本机模拟器", url: "http://127.0.0.1:30190"),
-        BackendPreset(id: "public", name: "公网", url: "https://evovoice.evowit.com"),
-        BackendPreset(id: "tailscale", name: "Tailscale", url: "http://100.64.0.2:30190"),
+        BackendPreset(id: "public-domain", name: "公网域名", url: defaultBackendURL),
+    ]
+    private static let legacyLocalBackendURLs: Set<String> = [
+        "http://192.168.0.11:30190",
+        "http://127.0.0.1:30190",
+        "http://100.64.0.2:30190",
+        "http://100.64.0.3:30190",
     ]
 
     @AppStorage("backendURL") var backendURL: String = AppSettings.defaultBackendURL {
@@ -27,17 +32,26 @@ final class AppSettings: ObservableObject {
     @AppStorage("searchEnabled") var searchEnabled: Bool = true {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("remoteServerDefaultsApplied") private var remoteServerDefaultsApplied: Bool = false
+    @AppStorage("webSearchDefaultEnabledApplied") private var webSearchDefaultEnabledApplied: Bool = false
     @AppStorage("handsFreeMode") var handsFreeMode: Bool = false {
         willSet { objectWillChange.send() }
     }
     @AppStorage("preferOnDeviceSpeech") var preferOnDeviceSpeech: Bool = true {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("ttsVoice") var ttsVoice: String = "default" {
+    @AppStorage("ttsVoice") var ttsVoice: String = AppSettings.defaultTTSVoice {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("referenceTTSVoiceApplied") private var referenceTTSVoiceApplied: Bool = false
     @AppStorage("maxSearchResults") var maxSearchResults: Int = 6 {
         willSet { objectWillChange.send() }
+    }
+
+    init() {
+        migrateLocalBackendToRemoteDomain()
+        migrateDefaultTTSVoice()
+        enableWebSearchByDefaultIfNeeded()
     }
 
     var normalizedBackendURL: URL? {
@@ -54,6 +68,30 @@ final class AppSettings: ObservableObject {
     func applyBackendPreset(_ presetID: String) {
         guard let preset = AppSettings.backendPresets.first(where: { $0.id == presetID }) else { return }
         backendURL = preset.url
+    }
+
+    private func migrateLocalBackendToRemoteDomain() {
+        guard !remoteServerDefaultsApplied else { return }
+        let current = backendURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if current.isEmpty || AppSettings.legacyLocalBackendURLs.contains(current) {
+            backendURL = AppSettings.defaultBackendURL
+        }
+        remoteServerDefaultsApplied = true
+    }
+
+    private func migrateDefaultTTSVoice() {
+        guard !referenceTTSVoiceApplied else { return }
+        let current = ttsVoice.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || current == "default" || current == AppSettings.legacyVoiceDesignPrompt {
+            ttsVoice = AppSettings.defaultTTSVoice
+        }
+        referenceTTSVoiceApplied = true
+    }
+
+    private func enableWebSearchByDefaultIfNeeded() {
+        guard !webSearchDefaultEnabledApplied else { return }
+        searchEnabled = true
+        webSearchDefaultEnabledApplied = true
     }
 
     var parsedSourceDomains: [String] {
