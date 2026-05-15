@@ -205,6 +205,14 @@ async def synthesize_speech(text: str, voice: str | None = None) -> tuple[bytes,
         "input": text,
         "response_format": "wav",
     }
+    if settings.tts_reference_audio:
+        payload["voice"] = "voxcpm:auto"
+        payload["ref_audio"] = settings.tts_reference_audio
+        if settings.tts_prompt_audio and settings.tts_prompt_text:
+            payload["prompt_audio"] = settings.tts_prompt_audio
+            payload["prompt_text"] = settings.tts_prompt_text
+    if settings.tts_cfg_value > 0:
+        payload["cfg_value"] = settings.tts_cfg_value
     if settings.tts_inference_timesteps > 0:
         payload["inference_timesteps"] = settings.tts_inference_timesteps
     endpoint = f"{settings.tts_base_url}/v1/audio/speech"

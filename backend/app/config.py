@@ -4,6 +4,10 @@ import os
 from dataclasses import dataclass
 
 
+DEFAULT_TTS_REFERENCE_AUDIO = "/home/dell/tts-stack/voxcpm2-openai/assets/evo_voice_ref.wav"
+DEFAULT_TTS_PROMPT_TEXT = "你好，我是 Evo Voice。接下来我会用自然、清楚、稳定的中文声音和你对话。"
+
+
 def _float_env(name: str, default: float) -> float:
     value = os.getenv(name)
     if not value:
@@ -40,6 +44,13 @@ class Settings:
     tts_voice: str = os.getenv("DELL_TTS_VOICE", "default")
     tts_timeout_seconds: float = _float_env("DELL_TTS_TIMEOUT_SECONDS", 60)
     tts_inference_timesteps: int = _int_env("DELL_TTS_INFERENCE_TIMESTEPS", 6)
+    tts_reference_audio: str = os.getenv("DELL_TTS_REFERENCE_AUDIO", DEFAULT_TTS_REFERENCE_AUDIO).strip()
+    tts_prompt_audio: str = os.getenv(
+        "DELL_TTS_PROMPT_AUDIO",
+        os.getenv("DELL_TTS_REFERENCE_AUDIO", DEFAULT_TTS_REFERENCE_AUDIO),
+    ).strip()
+    tts_prompt_text: str = os.getenv("DELL_TTS_PROMPT_TEXT", DEFAULT_TTS_PROMPT_TEXT).strip()
+    tts_cfg_value: float = _float_env("DELL_TTS_CFG_VALUE", 2.0)
 
     stt_base_url: str = os.getenv("DELL_STT_BASE_URL", "http://192.168.0.13:39050").rstrip("/")
     stt_model: str = os.getenv("DELL_STT_MODEL", "whisper-1")

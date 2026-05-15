@@ -35,6 +35,9 @@ final class ChatViewModel: ObservableObject {
 
     private let hardSpeechBreaks: Set<Character> = ["。", "！", "？", "!", "?", "\n"]
     private let softSpeechBreaks: Set<Character> = ["，", ",", "；", ";", "：", ":"]
+    private let minimumSpeechSegmentCharacters = 28
+    private let targetSpeechSegmentCharacters = 64
+    private let maximumSpeechSegmentCharacters = 96
 
     init() {
         speech.onTranscript = { [weak self] transcript, _ in
@@ -305,27 +308,75 @@ final class ChatViewModel: ObservableObject {
 
     private func drainSpeechSegments(force: Bool) -> [String] {
         var segments: [String] = []
-        while let breakIndex = pendingSpeechText.firstIndex(where: { hardSpeechBreaks.contains($0) }) {
-            let end = pendingSpeechText.index(after: breakIndex)
-            appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-            pendingSpeechText = String(pendingSpeechText[end...])
+        while let end = firstSpeechBreakEnd(
+            in: pendingSpeechText,
+            breaks: hardSpeechBreaks,
+            minimumCharacters: minimumSpeechSegmentCharacters
+        ) {
+            drainSpeechText(upTo: end, to: &segments)
         }
 
         if force {
             appendSpeechSegment(pendingSpeechText, to: &segments)
             pendingSpeechText = ""
-        } else if pendingSpeechText.count >= 48 {
-            if let breakIndex = pendingSpeechText.firstIndex(where: { softSpeechBreaks.contains($0) }) {
-                let end = pendingSpeechText.index(after: breakIndex)
-                appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-                pendingSpeechText = String(pendingSpeechText[end...])
-            } else if pendingSpeechText.count >= 72 {
-                let end = pendingSpeechText.index(pendingSpeechText.startIndex, offsetBy: 48)
-                appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
-                pendingSpeechText = String(pendingSpeechText[end...])
+        } else if pendingSpeechText.count >= targetSpeechSegmentCharacters {
+            if let end = bestSpeechBreakEnd(
+                in: pendingSpeechText,
+                breaks: softSpeechBreaks,
+                minimumCharacters: minimumSpeechSegmentCharacters,
+                maximumCharacters: targetSpeechSegmentCharacters
+            ) {
+                drainSpeechText(upTo: end, to: &segments)
+            } else if pendingSpeechText.count >= maximumSpeechSegmentCharacters {
+                let end = pendingSpeechText.index(
+                    pendingSpeechText.startIndex,
+                    offsetBy: targetSpeechSegmentCharacters
+                )
+                drainSpeechText(upTo: end, to: &segments)
             }
         }
         return segments
+    }
+
+    private func drainSpeechText(upTo end: String.Index, to segments: inout [String]) {
+        appendSpeechSegment(String(pendingSpeechText[..<end]), to: &segments)
+        pendingSpeechText = String(pendingSpeechText[end...])
+    }
+
+    private func firstSpeechBreakEnd(
+        in text: String,
+        breaks: Set<Character>,
+        minimumCharacters: Int
+    ) -> String.Index? {
+        var characterCount = 0
+        for index in text.indices {
+            characterCount += 1
+            if characterCount >= minimumCharacters, breaks.contains(text[index]) {
+                return text.index(after: index)
+            }
+        }
+        return nil
+    }
+
+    private func bestSpeechBreakEnd(
+        in text: String,
+        breaks: Set<Character>,
+        minimumCharacters: Int,
+        maximumCharacters: Int
+    ) -> String.Index? {
+        var characterCount = 0
+        var bestEnd: String.Index?
+        for index in text.indices {
+            characterCount += 1
+            guard characterCount >= minimumCharacters, breaks.contains(text[index]) else { continue }
+            let end = text.index(after: index)
+            if characterCount <= maximumCharacters {
+                bestEnd = end
+            } else {
+                return bestEnd ?? end
+            }
+        }
+        return bestEnd
     }
 
     private func appendSpeechSegment(_ rawText: String, to segments: inout [String]) {

@@ -41,6 +41,7 @@ async def health() -> dict:
             "model": settings.tts_model,
             "voice": settings.tts_voice,
             "inference_timesteps": settings.tts_inference_timesteps,
+            "reference_voice": bool(settings.tts_reference_audio),
         },
         "stt": {
             "base_url": settings.stt_base_url,
