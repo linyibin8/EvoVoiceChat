@@ -7,6 +7,8 @@ settings:
   base:
     SWIFT_VERSION: 5.0
     DEVELOPMENT_TEAM: N3G45G5H74
+    APP_BUNDLE_ID: com.linyibin8.evovoicechatlocal
+    APP_DISPLAY_NAME: Evo Voice LAN
     ALWAYS_SEARCH_USER_PATHS: NO
     SWIFT_OPTIMIZATION_LEVEL: -Onone
 targets:
@@ -19,7 +21,7 @@ targets:
       - path: ios/EvoVoiceChat/Resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.linyibin8.evovoicechat
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
         PRODUCT_NAME: EvoVoiceChat
         INFOPLIST_FILE: ios/EvoVoiceChat/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"

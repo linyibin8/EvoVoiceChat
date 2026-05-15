@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 export APP_NAME="${APP_NAME:-EvoVoiceChat}"
 export APP_SCHEME="${APP_SCHEME:-EvoVoiceChat}"
 export APP_PROJECT="${APP_PROJECT:-EvoVoiceChat.xcodeproj}"
-export APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.linyibin8.evovoicechat}"
+export APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.linyibin8.evovoicechatlocal}"
+export APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-Evo Voice LAN}"
 export APP_VERSION="${APP_VERSION:-0.1.0}"
 export APPLE_TEAM_ID="${APPLE_TEAM_ID:-N3G45G5H74}"
 export APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
@@ -59,6 +60,8 @@ xcodebuild \
   -archivePath "build/$APP_NAME.xcarchive" \
   APPLE_TEAM_ID="$APPLE_TEAM_ID" \
   APP_BUNDLE_ID="$APP_BUNDLE_ID" \
+  APP_DISPLAY_NAME="$APP_DISPLAY_NAME" \
+  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID" \
   APP_VERSION="$APP_VERSION" \
   APP_BUILD_NUMBER="$APP_BUILD_NUMBER" \
   MARKETING_VERSION="$APP_VERSION" \
