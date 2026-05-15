@@ -14,8 +14,11 @@ final class AppSettings: ObservableObject {
     static let backendPresets: [BackendPreset] = [
         BackendPreset(id: "local-lan", name: "本机局域网", url: "http://192.168.0.11:30190"),
         BackendPreset(id: "local-loopback", name: "本机模拟器", url: "http://127.0.0.1:30190"),
-        BackendPreset(id: "public", name: "公网", url: "https://evovoice.evowit.com"),
-        BackendPreset(id: "tailscale", name: "Tailscale", url: "http://100.64.0.2:30190"),
+    ]
+    private static let legacyRemoteBackendURLs: Set<String> = [
+        "https://evovoice.evowit.com",
+        "http://100.64.0.2:30190",
+        "http://100.64.0.3:30190",
     ]
 
     @AppStorage("backendURL") var backendURL: String = AppSettings.defaultBackendURL {
@@ -24,9 +27,10 @@ final class AppSettings: ObservableObject {
     @AppStorage("sourceDomains") var sourceDomains: String = "news.qq.com,finance.sina.com.cn,36kr.com,wallstreetcn.com,reuters.com" {
         willSet { objectWillChange.send() }
     }
-    @AppStorage("searchEnabled") var searchEnabled: Bool = true {
+    @AppStorage("searchEnabled") var searchEnabled: Bool = false {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("localLANTestModeApplied") private var localLANTestModeApplied: Bool = false
     @AppStorage("handsFreeMode") var handsFreeMode: Bool = false {
         willSet { objectWillChange.send() }
     }
@@ -38,6 +42,11 @@ final class AppSettings: ObservableObject {
     }
     @AppStorage("maxSearchResults") var maxSearchResults: Int = 6 {
         willSet { objectWillChange.send() }
+    }
+
+    init() {
+        migrateRemoteBackendToLocalLAN()
+        applyLocalLANTestDefaultsIfNeeded()
     }
 
     var normalizedBackendURL: URL? {
@@ -54,6 +63,19 @@ final class AppSettings: ObservableObject {
     func applyBackendPreset(_ presetID: String) {
         guard let preset = AppSettings.backendPresets.first(where: { $0.id == presetID }) else { return }
         backendURL = preset.url
+    }
+
+    private func migrateRemoteBackendToLocalLAN() {
+        let current = backendURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if current.isEmpty || AppSettings.legacyRemoteBackendURLs.contains(current) {
+            backendURL = AppSettings.defaultBackendURL
+        }
+    }
+
+    private func applyLocalLANTestDefaultsIfNeeded() {
+        guard !localLANTestModeApplied else { return }
+        searchEnabled = false
+        localLANTestModeApplied = true
     }
 
     var parsedSourceDomains: [String] {

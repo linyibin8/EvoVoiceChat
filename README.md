@@ -6,7 +6,7 @@ Native iOS voice chat MVP for a Yuanbao/Doubao-style assistant.
 
 - SwiftUI iOS app with text chat, push-to-talk voice mode, live speech recognition, Dell TTS playback, and real-time latency/RTF display.
 - FastAPI backend proxy for:
-  - OpenAI-compatible chat completions through the evowit endpoint.
+  - OpenAI-compatible chat completions through the LAN model gateway.
   - Streaming chat completions via Server-Sent Events (`/api/chat/stream`) for incremental UI updates.
   - Dell VoxCPM2 TTS (`/v1/audio/speech`) with speed headers.
   - Dell Whisper STT (`/v1/audio/transcriptions`) for fallback transcription.
@@ -24,7 +24,7 @@ backend\.venv\Scripts\pip install -r backend\requirements.txt
 powershell -ExecutionPolicy Bypass -File scripts\run_backend.ps1
 ```
 
-Default backend URL for the iOS app is `http://192.168.0.11:30190`, so a phone on the same LAN can call this machine directly. Change it in the app settings when using the public HTTPS endpoint or the Tailscale fallback.
+Default backend URL for the iOS app is `http://192.168.0.11:30190`, so a phone on the same LAN can call this machine directly. This local test build migrates older public/Tailscale settings back to the LAN backend on first launch and starts with web search off so LAN/model/TTS latency can be isolated.
 
 ## Backend profiles
 
@@ -49,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Pro
 # 100.64.0.2 backend calls this machine and Dell over Tailscale.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile server-to-local-tailscale
 
-# Original deployment profile.
+# Original remote deployment profile, kept only for fallback/debugging.
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile tailscale
 ```
 
@@ -59,6 +59,12 @@ To safely enter a local API key without putting it in shell history:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\switch_backend_profile.ps1 -Profile local-lan -PromptApiKey -Restart
+```
+
+Measure the local bottleneck from this machine:
+
+```powershell
+backend\.venv\Scripts\python.exe scripts\measure_local_latency.py --base-url http://127.0.0.1:30190
 ```
 
 ## iOS build

@@ -16,7 +16,7 @@ from .models import ChatRequest, ChatResponse, STTResponse, TTSRequest, WebReadR
 from .news import enrich_results_with_page_text, read_web_page, search_latest_news
 
 
-app = FastAPI(title="EvoVoiceChat API", version="0.2.0")
+app = FastAPI(title="EvoVoiceChat API", version="0.2.4")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -160,11 +160,12 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
         search_task = asyncio.create_task(prepare_search())
         try:
-            while not search_task.done():
-                await asyncio.sleep(3)
-                if not search_task.done():
+            while True:
+                try:
+                    search_results, timings, warnings = await asyncio.wait_for(asyncio.shield(search_task), timeout=3)
+                    break
+                except asyncio.TimeoutError:
                     yield _sse("ping", {"message": "search"})
-            search_results, timings, warnings = await search_task
         finally:
             if not search_task.done():
                 search_task.cancel()
