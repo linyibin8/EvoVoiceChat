@@ -14,11 +14,12 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root "backend"
 $envFile = Join-Path $backend ".env"
+$DefaultTtsPromptText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("5L2g5aW977yM5oiR5pivIEV2byBWb2ljZeOAguaOpeS4i+adpeaIkeS8mueUqOiHqueEtuOAgea4healmuOAgeeos+WumueahOS4reaWh+WjsOmfs+WSjOS9oOWvueivneOAgg=="))
 
 function Get-ExistingEnvValue {
   param([string]$Name)
   if (-not (Test-Path $envFile)) { return $null }
-  foreach ($line in Get-Content -LiteralPath $envFile) {
+  foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
     $trimmed = $line.Trim()
     if (-not $trimmed -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) { continue }
     $key, $value = $trimmed.Split("=", 2)
@@ -66,7 +67,7 @@ function Write-EvoEnv {
     "DELL_TTS_INFERENCE_TIMESTEPS=6",
     "DELL_TTS_REFERENCE_AUDIO=/home/dell/tts-stack/voxcpm2-openai/assets/evo_voice_ref.wav",
     "DELL_TTS_PROMPT_AUDIO=/home/dell/tts-stack/voxcpm2-openai/assets/evo_voice_ref.wav",
-    "DELL_TTS_PROMPT_TEXT=你好，我是 Evo Voice。接下来我会用自然、清楚、稳定的中文声音和你对话。",
+    "DELL_TTS_PROMPT_TEXT=$DefaultTtsPromptText",
     "DELL_TTS_CFG_VALUE=2.0",
     "",
     "DELL_STT_BASE_URL=$STTBaseUrl",

@@ -1,6 +1,7 @@
 import Foundation
 
 private struct PreparedSpeechSegment {
+    let text: String
     let fileURL: URL
     let metrics: TTSMetrics
 }
@@ -32,13 +33,18 @@ final class ChatViewModel: ObservableObject {
     private var queuedSpeechSegments: [String] = []
     private var pendingSpeechText = ""
     private var streamedSpeechText = ""
+    private var recentAssistantSpeechText = ""
+    private var suppressHandsFreeEchoUntil = Date.distantPast
     private weak var activeSettings: AppSettings?
 
     private let hardSpeechBreaks: Set<Character> = ["。", "！", "？", "!", "?", "\n"]
     private let softSpeechBreaks: Set<Character> = ["，", ",", "；", ";", "：", ":"]
-    private let minimumSpeechSegmentCharacters = 28
-    private let targetSpeechSegmentCharacters = 64
-    private let maximumSpeechSegmentCharacters = 96
+    private let minimumSpeechSegmentCharacters = 140
+    private let targetSpeechSegmentCharacters = 240
+    private let maximumSpeechSegmentCharacters = 360
+    private let fallbackMinimumCommonPrefixCharacters = 28
+    private let handsFreeResumeDelayNanoseconds: UInt64 = 700_000_000
+    private let handsFreeEchoSuppressionSeconds: TimeInterval = 8
 
     init() {
         speech.onTranscript = { [weak self] transcript, _ in
@@ -110,6 +116,8 @@ final class ChatViewModel: ObservableObject {
         queuedSpeechSegments.removeAll()
         pendingSpeechText = ""
         streamedSpeechText = ""
+        recentAssistantSpeechText = ""
+        suppressHandsFreeEchoUntil = Date.distantPast
         silenceTask?.cancel()
         speech.stop()
         player.stop()
@@ -126,6 +134,8 @@ final class ChatViewModel: ObservableObject {
         queuedSpeechSegments.removeAll()
         pendingSpeechText = ""
         streamedSpeechText = ""
+        recentAssistantSpeechText = ""
+        suppressHandsFreeEchoUntil = Date.distantPast
         player.stop()
         synthesisTicker?.cancel()
         errorMessage = nil
@@ -248,13 +258,18 @@ final class ChatViewModel: ObservableObject {
         guard let settings = activeSettings, settings.handsFreeMode, isListening else { return }
         let snapshot = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !snapshot.isEmpty else { return }
+        guard !shouldSuppressHandsFreeEcho(snapshot) else {
+            silenceTask?.cancel()
+            liveTranscript = ""
+            return
+        }
         silenceTask?.cancel()
         silenceTask = Task { [weak self, weak settings] in
             try? await Task.sleep(nanoseconds: 850_000_000)
             await MainActor.run {
                 guard let self, let settings else { return }
                 let current = self.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if self.isListening, current == snapshot {
+                if self.isListening, current == snapshot, !self.shouldSuppressHandsFreeEcho(current) {
                     self.stopListeningAndSend(settings: settings)
                 }
             }
@@ -314,26 +329,34 @@ final class ChatViewModel: ObservableObject {
 
     private func drainSpeechSegments(force: Bool) -> [String] {
         var segments: [String] = []
-        while let end = firstSpeechBreakEnd(
-            in: pendingSpeechText,
-            breaks: hardSpeechBreaks,
-            minimumCharacters: minimumSpeechSegmentCharacters
-        ) {
-            drainSpeechText(upTo: end, to: &segments)
-        }
-
         if force {
+            while pendingSpeechText.count > maximumSpeechSegmentCharacters {
+                if let end = bestSpeechBreakEnd(
+                    in: pendingSpeechText,
+                    breaks: hardSpeechBreaks.union(softSpeechBreaks),
+                    minimumCharacters: minimumSpeechSegmentCharacters,
+                    maximumCharacters: maximumSpeechSegmentCharacters
+                ) {
+                    drainSpeechText(upTo: end, to: &segments)
+                } else {
+                    let end = pendingSpeechText.index(
+                        pendingSpeechText.startIndex,
+                        offsetBy: targetSpeechSegmentCharacters
+                    )
+                    drainSpeechText(upTo: end, to: &segments)
+                }
+            }
             appendSpeechSegment(pendingSpeechText, to: &segments)
             pendingSpeechText = ""
-        } else if pendingSpeechText.count >= targetSpeechSegmentCharacters {
+        } else if pendingSpeechText.count >= maximumSpeechSegmentCharacters {
             if let end = bestSpeechBreakEnd(
                 in: pendingSpeechText,
-                breaks: softSpeechBreaks,
+                breaks: hardSpeechBreaks.union(softSpeechBreaks),
                 minimumCharacters: minimumSpeechSegmentCharacters,
-                maximumCharacters: targetSpeechSegmentCharacters
+                maximumCharacters: maximumSpeechSegmentCharacters
             ) {
                 drainSpeechText(upTo: end, to: &segments)
-            } else if pendingSpeechText.count >= maximumSpeechSegmentCharacters {
+            } else {
                 let end = pendingSpeechText.index(
                     pendingSpeechText.startIndex,
                     offsetBy: targetSpeechSegmentCharacters
@@ -355,7 +378,7 @@ final class ChatViewModel: ObservableObject {
         if commonPrefix == alreadyStreamed.count {
             return String(fullText.dropFirst(commonPrefix))
         }
-        guard commonPrefix >= minimumSpeechSegmentCharacters else { return "" }
+        guard commonPrefix >= fallbackMinimumCommonPrefixCharacters else { return "" }
         return String(fullText.dropFirst(commonPrefix))
     }
 
@@ -369,21 +392,6 @@ final class ChatViewModel: ObservableObject {
             rightIndex = right.index(after: rightIndex)
         }
         return count
-    }
-
-    private func firstSpeechBreakEnd(
-        in text: String,
-        breaks: Set<Character>,
-        minimumCharacters: Int
-    ) -> String.Index? {
-        var characterCount = 0
-        for index in text.indices {
-            characterCount += 1
-            if characterCount >= minimumCharacters, breaks.contains(text[index]) {
-                return text.index(after: index)
-            }
-        }
-        return nil
     }
 
     private func bestSpeechBreakEnd(
@@ -435,13 +443,6 @@ final class ChatViewModel: ObservableObject {
             isSynthesizing = false
             synthesisTicker?.cancel()
             synthesisTicker = nil
-            if !Task.isCancelled,
-               settings.handsFreeMode,
-               !isSending,
-               !isListening,
-               queuedSpeechSegments.isEmpty {
-                startListening(settings: settings)
-            }
         }
 
         var currentTask = makeSynthesisTask(settings: settings)
@@ -455,6 +456,7 @@ final class ChatViewModel: ObservableObject {
             }
             currentTask = nextTask ?? makeSynthesisTask(settings: settings)
         }
+        await resumeHandsFreeListeningIfNeeded(settings: settings)
     }
 
     private func awaitSynthesisTask(_ task: Task<PreparedSpeechSegment?, Never>) async -> PreparedSpeechSegment? {
@@ -506,7 +508,7 @@ final class ChatViewModel: ObservableObject {
             var metrics = result.metrics
             metrics.elapsedSeconds = Date().timeIntervalSince(started)
             lastTTSMetrics = metrics
-            return PreparedSpeechSegment(fileURL: result.fileURL, metrics: metrics)
+            return PreparedSpeechSegment(text: cleanText, fileURL: result.fileURL, metrics: metrics)
         } catch is CancellationError {
             synthesisTicker?.cancel()
             isSynthesizing = false
@@ -523,6 +525,7 @@ final class ChatViewModel: ObservableObject {
         do {
             lastTTSMetrics = segment.metrics
             try await player.playAndWait(fileURL: segment.fileURL)
+            rememberSpokenAssistantText(segment.text)
             return !Task.isCancelled
         } catch is CancellationError {
             return false
@@ -530,5 +533,59 @@ final class ChatViewModel: ObservableObject {
             errorMessage = "语音播放失败：\(error.localizedDescription)"
             return false
         }
+    }
+
+    private func resumeHandsFreeListeningIfNeeded(settings: AppSettings) async {
+        guard settings.handsFreeMode, !isSending, !isListening, queuedSpeechSegments.isEmpty else { return }
+        do {
+            try await Task.sleep(nanoseconds: handsFreeResumeDelayNanoseconds)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled,
+              settings.handsFreeMode,
+              !isSending,
+              !isListening,
+              queuedSpeechSegments.isEmpty else { return }
+        liveTranscript = ""
+        startListening(settings: settings)
+    }
+
+    private func rememberSpokenAssistantText(_ text: String) {
+        let normalized = normalizeSpeechForEchoCheck(text)
+        guard !normalized.isEmpty else { return }
+        recentAssistantSpeechText = String((recentAssistantSpeechText + normalized).suffix(700))
+        suppressHandsFreeEchoUntil = Date().addingTimeInterval(handsFreeEchoSuppressionSeconds)
+    }
+
+    private func shouldSuppressHandsFreeEcho(_ text: String) -> Bool {
+        guard Date() < suppressHandsFreeEchoUntil else { return false }
+        let spoken = recentAssistantSpeechText
+        let transcript = normalizeSpeechForEchoCheck(text)
+        guard transcript.count >= 6, !spoken.isEmpty else { return false }
+        if spoken.contains(transcript) { return true }
+        return orderedCharacterMatchRatio(transcript, in: spoken) >= 0.82
+    }
+
+    private func normalizeSpeechForEchoCheck(_ text: String) -> String {
+        text
+            .lowercased()
+            .replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"[^\p{Han}a-z0-9]+"#, with: "", options: .regularExpression)
+    }
+
+    private func orderedCharacterMatchRatio(_ needle: String, in haystack: String) -> Double {
+        guard !needle.isEmpty, !haystack.isEmpty else { return 0 }
+        var matched = 0
+        var searchStart = haystack.startIndex
+        for character in needle {
+            guard searchStart < haystack.endIndex,
+                  let index = haystack[searchStart...].firstIndex(of: character) else {
+                continue
+            }
+            matched += 1
+            searchStart = haystack.index(after: index)
+        }
+        return Double(matched) / Double(needle.count)
     }
 }
